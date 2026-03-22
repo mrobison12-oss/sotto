@@ -12,6 +12,7 @@ from sotto.config import CONFIG_DIR
 logger = logging.getLogger("sotto")
 
 LOG_FILE = CONFIG_DIR / "transcriptions.log"
+LOG_MAX_BYTES = 1_000_000  # 1MB — rotate when exceeded
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,10 @@ class TranscriptionHistory:
     def _append_log(self, entry: HistoryEntry) -> None:
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            # Rotate if over size limit
+            if LOG_FILE.exists() and LOG_FILE.stat().st_size > LOG_MAX_BYTES:
+                backup = LOG_FILE.with_suffix(".log.1")
+                LOG_FILE.replace(backup)
             with open(LOG_FILE, "a", encoding="utf-8") as f:
                 ts = entry.timestamp.strftime("%Y-%m-%d %H:%M:%S")
                 f.write(f"[{ts}] ({entry.duration_seconds:.1f}s audio, "

@@ -32,6 +32,7 @@ HOTKEY_ID = 1
 
 
 class AppState(enum.Enum):
+    LOADING = "loading"
     IDLE = "idle"
     LISTENING = "listening"
     PROCESSING = "processing"
@@ -90,6 +91,9 @@ def _paste_after_delay(delay_ms: int) -> None:
 class SottoApp(QMainWindow):
     """Hidden main window — exists for nativeEvent hotkey handling."""
 
+    _models_loaded = Signal()
+    _model_load_failed = Signal(str)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Sotto")
@@ -118,6 +122,9 @@ class SottoApp(QMainWindow):
         self._audio.audio_ready.connect(self._on_audio_ready)
         self._audio.level_changed.connect(self._tray.update_level)
         self._audio.level_changed.connect(self._indicator.update_level)
+        self._audio.error.connect(self._on_audio_error)
+        self._models_loaded.connect(self._on_models_loaded)
+        self._model_load_failed.connect(self._on_model_load_failed)
         self._tray.quit_requested.connect(self._quit)
         self._tray.settings_requested.connect(self._show_settings)
 
@@ -132,14 +139,12 @@ class SottoApp(QMainWindow):
             )
             sys.exit(1)
 
-        # Eager model load
-        logger.info("Loading whisper model '%s'...", self._backend.model_size)
-        self._backend.load_model()
-        self._audio.load_vad()
-        logger.info("Model loaded, ready for dictation")
-
         self._tray.show()
-        self._update_state(AppState.IDLE)
+        self._update_state(AppState.LOADING)
+
+        # Load models in background so the GUI stays responsive
+        import threading
+        threading.Thread(target=self._load_models, daemon=True).start()
 
     def nativeEvent(self, event_type: QByteArray | bytes, message: int) -> object:
         """Handle WM_HOTKEY from RegisterHotKey."""
@@ -149,6 +154,31 @@ class SottoApp(QMainWindow):
                 self._on_hotkey()
                 return True, 0
         return super().nativeEvent(event_type, message)
+
+    def _load_models(self) -> None:
+        """Load whisper + VAD models (runs on background thread)."""
+        try:
+            logger.info("Loading whisper model '%s'...", self._backend.model_size)
+            self._backend.load_model()
+            self._audio.load_vad()
+            logger.info("Model loaded, ready for dictation")
+            self._models_loaded.emit()
+        except Exception as e:
+            logger.error("Model loading failed: %s", e)
+            self._model_load_failed.emit(str(e))
+
+    @Slot()
+    def _on_models_loaded(self) -> None:
+        self._update_state(AppState.IDLE)
+
+    @Slot(str)
+    def _on_model_load_failed(self, error: str) -> None:
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.critical(
+            None, "Sotto — Model Error",
+            f"Failed to load transcription model.\n\n{error}",
+        )
+        sys.exit(1)
 
     def _on_hotkey(self) -> None:
         """Toggle recording on hotkey press."""
@@ -235,6 +265,15 @@ class SottoApp(QMainWindow):
         if self._config.audio_cues:
             sounds.play("error")
         self._current_signals = None
+        self._update_state(AppState.IDLE)
+
+    @Slot(str)
+    def _on_audio_error(self, error: str) -> None:
+        logger.error("Audio error: %s", error)
+        if self._config.audio_cues:
+            sounds.play("error")
+        if self._config.show_notifications:
+            self._tray.show_toast("Sotto — Error", error)
         self._update_state(AppState.IDLE)
 
     def _update_state(self, state: AppState) -> None:

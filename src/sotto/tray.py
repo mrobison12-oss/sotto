@@ -15,12 +15,14 @@ if TYPE_CHECKING:
 
 # State colors
 COLORS = {
-    "idle": QColor(100, 100, 100),       # Gray — dormant
+    "loading": QColor(180, 140, 50),      # Amber — loading
+    "idle": QColor(100, 100, 100),        # Gray — dormant
     "listening": QColor(220, 50, 50),     # Red — recording
     "processing": QColor(50, 150, 220),   # Blue — thinking
 }
 
 TOOLTIPS = {
+    "loading": "Sotto — Loading model...",
     "idle": "Sotto — Ready (Ctrl+Space)",
     "listening": "Sotto — Listening...",
     "processing": "Sotto — Transcribing...",

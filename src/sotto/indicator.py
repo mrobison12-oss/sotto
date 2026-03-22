@@ -52,7 +52,7 @@ class RecordingIndicator(QWidget):
         self._state = state.value
         self._level = 0.0
 
-        if self._state == "idle":
+        if self._state in ("idle", "loading"):
             self._pulse_timer.stop()
             self.hide()
             return

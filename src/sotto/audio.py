@@ -34,6 +34,7 @@ class AudioCapture(QObject):
 
     audio_ready = Signal(np.ndarray)
     level_changed = Signal(float)
+    error = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -86,14 +87,20 @@ class AudioCapture(QObject):
         self._pending_level = None
         self._recording = True
 
-        self._stream = sd.InputStream(
-            samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="float32",
-            blocksize=CHUNK_SAMPLES,
-            callback=self._audio_callback,
-        )
-        self._stream.start()
+        try:
+            self._stream = sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                channels=CHANNELS,
+                dtype="float32",
+                blocksize=CHUNK_SAMPLES,
+                callback=self._audio_callback,
+            )
+            self._stream.start()
+        except Exception as e:
+            self._recording = False
+            logger.error("Failed to open audio device: %s", e)
+            self.error.emit(f"Audio device error: {e}")
+            return
         self._poll_timer.start()
 
     def stop(self) -> None:
@@ -103,8 +110,11 @@ class AudioCapture(QObject):
         self._recording = False
         self._poll_timer.stop()
         if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception as e:
+                logger.warning("Error closing audio stream: %s", e)
             self._stream = None
         duration = len(self._chunks) * CHUNK_SAMPLES / SAMPLE_RATE
         logger.info("Recording stopped, %.1fs captured", duration)
