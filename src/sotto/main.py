@@ -29,8 +29,12 @@ from PySide6.QtCore import QRunnable, QThreadPool, Signal, Slot, QObject, QByteA
 from PySide6.QtWidgets import QApplication, QMainWindow
 
 from sotto.audio import AudioCapture
+from sotto.config import SottoConfig
+from sotto.history import TranscriptionHistory
+from sotto.paste import simulate_paste
 from sotto.transcribe import TranscriptionResult, create_backend
 from sotto.tray import SystemTray
+from sotto import sounds
 
 logger = logging.getLogger("sotto")
 
@@ -62,19 +66,39 @@ class TranscriptionTask(QRunnable):
     destroyed QObject.
     """
 
-    def __init__(self, backend, audio: np.ndarray, signals: TranscriptionSignals):
+    def __init__(self, backend, audio: np.ndarray, signals: TranscriptionSignals,
+                 initial_prompt: str | None = None):
         super().__init__()
         self.backend = backend
         self.audio = audio
         self.signals = signals
+        self.initial_prompt = initial_prompt
         self.setAutoDelete(True)
 
     def run(self) -> None:
         try:
-            result = self.backend.transcribe(self.audio)
+            result = self.backend.transcribe(self.audio, initial_prompt=self.initial_prompt)
             self.signals.finished.emit(result)
         except Exception as e:
             self.signals.error.emit(str(e))
+
+
+def _paste_after_delay(delay_ms: int) -> None:
+    """Schedule paste on the main thread after a delay.
+
+    SendInput must run on the main thread (which owns the foreground
+    input context). QTimer.singleShot is thread-safe and fires on the
+    main thread's event loop.
+    """
+    from PySide6.QtCore import QTimer
+
+    def _do_paste():
+        try:
+            simulate_paste()
+        except Exception as e:
+            logger.warning("Auto-paste failed: %s", e)
+
+    QTimer.singleShot(delay_ms, _do_paste)
 
 
 class SottoApp(QMainWindow):
@@ -85,23 +109,29 @@ class SottoApp(QMainWindow):
         self.setWindowTitle("Sotto")
         self.hide()
 
+        self._config = SottoConfig.load()
         self._state = AppState.IDLE
         self._shutting_down = False
         self._backend = create_backend()
         self._audio = AudioCapture(parent=self)
-        self._tray = SystemTray(parent=self)
-        self._pool = QThreadPool.globalInstance()
+        self._history = TranscriptionHistory(max_size=self._config.history_size)
+        self._tray = SystemTray(history=self._history, parent=self)
+
+        # Private thread pool for transcription — avoids polluting Qt's global pool
+        self._pool = QThreadPool()
         self._pool.setMaxThreadCount(1)
 
         # Keep a reference to the current transcription signals to prevent GC
         # while the queued signal is in flight.
         self._current_signals: TranscriptionSignals | None = None
+        self._settings_dlg = None
 
         # Connect signals — audio_ready and level_changed are now emitted
         # from the main thread (via QTimer polling), so direct connection is fine.
         self._audio.audio_ready.connect(self._on_audio_ready)
         self._audio.level_changed.connect(self._tray.update_level)
         self._tray.quit_requested.connect(self._quit)
+        self._tray.settings_requested.connect(self._show_settings)
 
         # Register hotkey: Ctrl+Space
         hwnd = int(self.winId())
@@ -130,9 +160,13 @@ class SottoApp(QMainWindow):
         """Toggle recording on hotkey press."""
         if self._state == AppState.IDLE:
             self._update_state(AppState.LISTENING)
+            if self._config.audio_cues:
+                sounds.play("start")
             self._audio.start()
         elif self._state == AppState.LISTENING:
             self._audio.stop()
+            if self._config.audio_cues:
+                sounds.play("stop")
         # If PROCESSING, ignore hotkey
 
     @Slot(np.ndarray)
@@ -155,17 +189,41 @@ class SottoApp(QMainWindow):
         signals = TranscriptionSignals()
         signals.finished.connect(self._on_transcription_done)
         signals.error.connect(self._on_transcription_error)
-        self._current_signals = signals
+        self._current_signals = signals  # must be set before start() to prevent GC race
 
-        task = TranscriptionTask(self._backend, audio, signals)
-        self._pool.start(task)
+        prompt = self._config.initial_prompt if self._config.initial_prompt else None
+        task = TranscriptionTask(self._backend, audio, signals, initial_prompt=prompt)
+        self._pool.start(task)  # task may complete instantly — signals ref must already be held
 
     @Slot(TranscriptionResult)
     def _on_transcription_done(self, result: TranscriptionResult) -> None:
-        """Write transcription to clipboard on main thread."""
+        """Write transcription to clipboard, auto-paste, notify."""
         if result.text:
             clipboard = QApplication.clipboard()
             clipboard.setText(result.text)
+
+            # History + file log
+            self._history.add(
+                text=result.text,
+                duration_seconds=result.duration_seconds,
+                processing_seconds=result.processing_seconds,
+                log_to_file=self._config.fallback_log,
+            )
+            self._tray.refresh_history()
+
+            # Audio cue
+            if self._config.audio_cues:
+                sounds.play("done")
+
+            # Desktop notification
+            if self._config.show_notifications:
+                preview = result.text[:120] + ("..." if len(result.text) > 120 else "")
+                self._tray.show_toast("Sotto", preview)
+
+            # Auto-paste after delay (must run on main thread for SendInput)
+            if self._config.auto_paste:
+                _paste_after_delay(self._config.auto_paste_delay_ms)
+
             logger.info(
                 "Transcribed %.1fs audio in %.2fs: %s",
                 result.duration_seconds,
@@ -180,6 +238,8 @@ class SottoApp(QMainWindow):
     @Slot(str)
     def _on_transcription_error(self, error: str) -> None:
         logger.error("Transcription failed: %s", error)
+        if self._config.audio_cues:
+            sounds.play("error")
         self._current_signals = None
         self._update_state(AppState.IDLE)
 
@@ -187,11 +247,39 @@ class SottoApp(QMainWindow):
         self._state = state
         self._tray.update_state(state)
 
+    def _show_settings(self) -> None:
+        """Open the settings dialog (single instance)."""
+        if self._settings_dlg is not None:
+            self._settings_dlg.raise_()
+            self._settings_dlg.activateWindow()
+            return
+        from sotto.settings_ui import SettingsDialog
+
+        dlg = SettingsDialog(self._config, parent=self)
+        dlg.config_changed.connect(self._on_config_changed)
+        dlg.finished.connect(self._on_settings_closed)
+        self._settings_dlg = dlg
+        dlg.show()
+
+    def _on_settings_closed(self) -> None:
+        self._settings_dlg = None
+
+    @Slot(SottoConfig)
+    def _on_config_changed(self, config: SottoConfig) -> None:
+        """Apply updated settings."""
+        self._config = config
+        self._history.resize(config.history_size)
+        logger.info("Settings updated")
+
     def _quit(self) -> None:
         if self._shutting_down:
             return
         self._shutting_down = True
         ctypes.windll.user32.UnregisterHotKey(int(self.winId()), HOTKEY_ID)
+        # Stop active recording so no new tasks are submitted
+        self._audio.stop()
+        # Wait for in-flight transcription before destroying the model
+        self._pool.waitForDone(5000)
         self._backend.unload_model()
         QApplication.quit()
 

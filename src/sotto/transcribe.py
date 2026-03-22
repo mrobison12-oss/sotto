@@ -43,7 +43,8 @@ class WhisperBackend:
         )
 
     def transcribe(
-        self, audio: np.ndarray, sample_rate: int = 16000
+        self, audio: np.ndarray, sample_rate: int = 16000,
+        initial_prompt: str | None = None,
     ) -> TranscriptionResult:
         """Transcribe audio array to text."""
         if self._model is None:
@@ -57,6 +58,7 @@ class WhisperBackend:
             language=os.environ.get("SOTTO_LANGUAGE"),
             beam_size=5,
             word_timestamps=True,
+            initial_prompt=initial_prompt or None,
         )
         segments = list(segments_iter)
         text = " ".join(seg.text.strip() for seg in segments).strip()
