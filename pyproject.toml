@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sotto"
+version = "0.1.0"
+description = "Local speech-to-text dictation tool — sotto voce"
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6",
+    "sounddevice",
+    "numpy",
+    "faster-whisper>=1.0",
+    "silero-vad",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+sotto = "sotto.main:main"
