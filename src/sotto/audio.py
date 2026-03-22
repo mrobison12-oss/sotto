@@ -6,7 +6,8 @@ import threading
 
 import numpy as np
 import sounddevice as sd
-from PySide6.QtCore import QObject, Signal, Qt
+import torch
+from PySide6.QtCore import QObject, QTimer, Signal
 
 logger = logging.getLogger("sotto")
 
@@ -33,7 +34,6 @@ class AudioCapture(QObject):
 
     audio_ready = Signal(np.ndarray)
     level_changed = Signal(float)
-    _vad_stopped = Signal()  # internal: defers stream stop from callback to main thread
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -53,10 +53,17 @@ class AudioCapture(QObject):
 
         self._recording = False
 
-        # Connect VAD stop signal to main thread via queued connection.
-        # The audio callback cannot call stream.stop() directly — PortAudio
-        # holds a lock during the callback and stop() would deadlock.
-        self._vad_stopped.connect(self.stop, Qt.ConnectionType.QueuedConnection)
+        # Thread-safe flags set by the PortAudio callback, polled by QTimer
+        # on the main thread. This avoids emitting Qt signals from a non-Qt
+        # thread, which is unreliable in PySide6.
+        self._pending_stop = False
+        self._pending_level: float | None = None
+        self._flag_lock = threading.Lock()
+
+        # Poll callback flags every 50ms from the main thread
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(50)
+        self._poll_timer.timeout.connect(self._poll_flags)
 
     def load_vad(self) -> None:
         """Pre-load VAD model. Call once at startup."""
@@ -75,6 +82,8 @@ class AudioCapture(QObject):
         self._speech_detected = False
         self._silence_chunks = 0
         self._chunk_count = 0
+        self._pending_stop = False
+        self._pending_level = None
         self._recording = True
 
         self._stream = sd.InputStream(
@@ -85,25 +94,44 @@ class AudioCapture(QObject):
             callback=self._audio_callback,
         )
         self._stream.start()
+        self._poll_timer.start()
 
     def stop(self) -> None:
-        """Stop recording and emit audio_ready. Safe to call from any thread."""
+        """Stop recording and emit audio_ready. Safe to call from main thread."""
         if not self._recording:
             return
         self._recording = False
+        self._poll_timer.stop()
         if self._stream is not None:
             self._stream.stop()
             self._stream.close()
             self._stream = None
+        duration = len(self._chunks) * CHUNK_SAMPLES / SAMPLE_RATE
+        logger.info("Recording stopped, %.1fs captured", duration)
         self._emit_audio()
+
+    def _poll_flags(self) -> None:
+        """Called by QTimer on the main thread — checks flags set by callback."""
+        with self._flag_lock:
+            should_stop = self._pending_stop
+            self._pending_stop = False
+            level = self._pending_level
+            self._pending_level = None
+
+        if level is not None:
+            self.level_changed.emit(level)
+
+        if should_stop:
+            logger.info("VAD requested stop — processing on main thread")
+            self.stop()
 
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
         """sounddevice callback — runs on PortAudio audio thread.
 
-        IMPORTANT: Must not call stream.stop()/close() from here — PortAudio
-        holds a lock during callbacks. Use _vad_stopped signal to defer to main thread.
+        IMPORTANT: Must not call stream.stop()/close() or emit Qt signals
+        from here. Sets flags that the main-thread QTimer polls.
         """
-        if not self._recording:
+        if not self._recording or self._pending_stop:
             return
 
         chunk = indata[:, 0].copy()  # mono float32
@@ -111,33 +139,37 @@ class AudioCapture(QObject):
         with self._lock:
             self._chunks.append(chunk)
 
-        # Max recording duration safety — prevents unbounded memory growth
-        # if VAD fails or environment is noisy
+        # Max recording duration safety
         self._chunk_count += 1
         if self._chunk_count >= self._max_chunks:
             logger.warning("Max recording duration reached (%.0fs), auto-stopping",
                            self._max_chunks * CHUNK_SAMPLES / SAMPLE_RATE)
-            self._recording = False
-            self._vad_stopped.emit()
+            with self._flag_lock:
+                self._pending_stop = True
             return
 
-        # RMS level for UI
+        # RMS level for UI — store for main thread to emit
         rms = float(np.sqrt(np.mean(chunk ** 2)))
-        self.level_changed.emit(min(rms * 5.0, 1.0))  # scale up for visibility
+        with self._flag_lock:
+            self._pending_level = min(rms * 5.0, 1.0)
 
         # VAD inference
         if self._vad_model is not None:
-            speech_prob = self._vad_model(chunk, SAMPLE_RATE).item()
+            try:
+                speech_prob = self._vad_model(torch.from_numpy(chunk), SAMPLE_RATE).item()
+            except Exception as e:
+                if self._chunk_count % 100 == 1:
+                    logger.error("VAD inference failed: %s", e)
+                return
             if speech_prob > 0.5:
                 self._speech_detected = True
                 self._silence_chunks = 0
             elif self._speech_detected:
                 self._silence_chunks += 1
                 if self._silence_chunks >= self._silence_threshold:
-                    # Sustained silence after speech — signal main thread to stop.
-                    # Set flag immediately to prevent further chunk processing.
-                    self._recording = False
-                    self._vad_stopped.emit()
+                    logger.info("VAD silence threshold reached, auto-stopping")
+                    with self._flag_lock:
+                        self._pending_stop = True
 
     def _emit_audio(self) -> None:
         """Concatenate buffered chunks and emit signal."""

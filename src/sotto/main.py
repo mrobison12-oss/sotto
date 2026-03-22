@@ -4,7 +4,25 @@ import ctypes
 import ctypes.wintypes
 import enum
 import logging
+import os
 import sys
+
+# CTranslate2 needs cublas64_12.dll for CUDA. The nvidia-cublas-cu12 pip
+# package installs it under site-packages/nvidia/cublas/bin/ which isn't
+# on PATH by default. Add it before any CUDA operations.
+def _add_cuda_dll_paths():
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("nvidia.cublas")
+        if spec and spec.submodule_search_locations:
+            bin_dir = os.path.join(list(spec.submodule_search_locations)[0], "bin")
+            if os.path.isdir(bin_dir):
+                os.add_dll_directory(bin_dir)
+                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+    except Exception:
+        pass
+
+_add_cuda_dll_paths()
 
 import numpy as np
 from PySide6.QtCore import QRunnable, QThreadPool, Signal, Slot, QObject, QByteArray, Qt
@@ -79,10 +97,10 @@ class SottoApp(QMainWindow):
         # while the queued signal is in flight.
         self._current_signals: TranscriptionSignals | None = None
 
-        # Connect signals — use QueuedConnection for cross-thread signals
-        # from the audio callback (which runs on a non-Qt PortAudio thread).
-        self._audio.audio_ready.connect(self._on_audio_ready, Qt.ConnectionType.QueuedConnection)
-        self._audio.level_changed.connect(self._tray.update_level, Qt.ConnectionType.QueuedConnection)
+        # Connect signals — audio_ready and level_changed are now emitted
+        # from the main thread (via QTimer polling), so direct connection is fine.
+        self._audio.audio_ready.connect(self._on_audio_ready)
+        self._audio.level_changed.connect(self._tray.update_level)
         self._tray.quit_requested.connect(self._quit)
 
         # Register hotkey: Ctrl+Space
