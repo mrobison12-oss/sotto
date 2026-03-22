@@ -1,5 +1,6 @@
 """Transcription backend wrapping faster-whisper."""
 
+import logging
 import os
 import sys
 import time
@@ -7,6 +8,8 @@ from dataclasses import dataclass
 
 import numpy as np
 from faster_whisper import WhisperModel
+
+logger = logging.getLogger("sotto")
 
 
 @dataclass(frozen=True)
@@ -36,11 +39,19 @@ class WhisperBackend:
 
     def load_model(self) -> None:
         """Load the whisper model into memory. Call once at startup."""
-        self._model = WhisperModel(
-            self.model_size,
-            device=self.device,
-            compute_type=self.compute_type,
-        )
+        try:
+            self._model = WhisperModel(
+                self.model_size,
+                device=self.device,
+                compute_type=self.compute_type,
+            )
+        except Exception as e:
+            logger.error("Failed to load model '%s' (device=%s): %s",
+                         self.model_size, self.device, e)
+            raise RuntimeError(
+                f"Could not load whisper model '{self.model_size}': {e}\n"
+                f"Check CUDA availability and that the model name is valid."
+            ) from e
 
     def transcribe(
         self, audio: np.ndarray, sample_rate: int = 16000,
@@ -53,14 +64,19 @@ class WhisperBackend:
         duration = len(audio) / sample_rate
         t0 = time.perf_counter()
 
-        segments_iter, info = self._model.transcribe(
-            audio,
-            language=os.environ.get("SOTTO_LANGUAGE"),
-            beam_size=5,
-            word_timestamps=True,
-            initial_prompt=initial_prompt or None,
-        )
-        segments = list(segments_iter)
+        try:
+            segments_iter, info = self._model.transcribe(
+                audio,
+                language=os.environ.get("SOTTO_LANGUAGE"),
+                beam_size=5,
+                word_timestamps=True,
+                initial_prompt=initial_prompt or None,
+            )
+            segments = list(segments_iter)
+        except Exception as e:
+            raise RuntimeError(
+                f"Transcription failed ({duration:.1f}s audio): {e}"
+            ) from e
         text = " ".join(seg.text.strip() for seg in segments).strip()
         elapsed = time.perf_counter() - t0
 

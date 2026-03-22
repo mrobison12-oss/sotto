@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pytest-qt"]
 
 [project.scripts]
 sotto = "sotto.main:main"

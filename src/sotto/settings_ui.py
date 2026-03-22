@@ -62,6 +62,11 @@ class SettingsDialog(QDialog):
         self._notifications.setChecked(config.show_notifications)
         f_layout.addRow(self._notifications)
 
+        self._indicator = QCheckBox("Show recording indicator")
+        self._indicator.setChecked(config.show_indicator)
+        self._indicator.setToolTip("Translucent pill overlay during recording and transcription")
+        f_layout.addRow(self._indicator)
+
         layout.addWidget(feedback)
 
         # -- History group --
@@ -96,6 +101,7 @@ class SettingsDialog(QDialog):
             history_size=self._history_size.value(),
             fallback_log=self._fallback_log.isChecked(),
             initial_prompt=self._initial_prompt.text().strip(),
+            show_indicator=self._indicator.isChecked(),
         )
         new_config.save()
         self.config_changed.emit(new_config)

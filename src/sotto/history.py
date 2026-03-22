@@ -26,17 +26,19 @@ class TranscriptionHistory:
     """Fixed-size history with optional file logging."""
 
     def __init__(self, max_size: int = 10):
+        self._lock = threading.Lock()
         self._entries: deque[HistoryEntry] = deque(maxlen=max_size)
 
     @property
     def entries(self) -> list[HistoryEntry]:
         """Most recent first."""
-        return list(reversed(self._entries))
+        with self._lock:
+            return list(reversed(self._entries))
 
     def resize(self, max_size: int) -> None:
         """Change capacity, keeping most recent entries."""
-        new = deque(self._entries, maxlen=max_size)
-        self._entries = new
+        with self._lock:
+            self._entries = deque(self._entries, maxlen=max_size)
 
     def add(self, text: str, duration_seconds: float, processing_seconds: float,
             log_to_file: bool = True) -> HistoryEntry:
@@ -46,7 +48,8 @@ class TranscriptionHistory:
             duration_seconds=duration_seconds,
             processing_seconds=processing_seconds,
         )
-        self._entries.append(entry)
+        with self._lock:
+            self._entries.append(entry)
 
         if log_to_file:
             threading.Thread(target=self._append_log, args=(entry,), daemon=True).start()

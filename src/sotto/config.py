@@ -22,6 +22,7 @@ class SottoConfig:
     history_size: int = 10
     fallback_log: bool = True
     initial_prompt: str = "Sotto, Claude, Obsidian"
+    show_indicator: bool = True
 
     def save(self) -> None:
         """Persist current config to disk."""

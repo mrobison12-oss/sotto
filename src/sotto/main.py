@@ -4,25 +4,10 @@ import ctypes
 import ctypes.wintypes
 import enum
 import logging
-import os
 import sys
 
-# CTranslate2 needs cublas64_12.dll for CUDA. The nvidia-cublas-cu12 pip
-# package installs it under site-packages/nvidia/cublas/bin/ which isn't
-# on PATH by default. Add it before any CUDA operations.
-def _add_cuda_dll_paths():
-    try:
-        import importlib.util
-        spec = importlib.util.find_spec("nvidia.cublas")
-        if spec and spec.submodule_search_locations:
-            bin_dir = os.path.join(list(spec.submodule_search_locations)[0], "bin")
-            if os.path.isdir(bin_dir):
-                os.add_dll_directory(bin_dir)
-                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
-    except Exception:
-        pass
-
-_add_cuda_dll_paths()
+from sotto.cuda_utils import ensure_cuda_dlls
+ensure_cuda_dlls()
 
 import numpy as np
 from PySide6.QtCore import QRunnable, QThreadPool, Signal, Slot, QObject, QByteArray, Qt
@@ -33,6 +18,7 @@ from sotto.config import SottoConfig
 from sotto.history import TranscriptionHistory
 from sotto.paste import simulate_paste
 from sotto.transcribe import TranscriptionResult, create_backend
+from sotto.indicator import RecordingIndicator
 from sotto.tray import SystemTray
 from sotto import sounds
 
@@ -116,6 +102,7 @@ class SottoApp(QMainWindow):
         self._audio = AudioCapture(parent=self)
         self._history = TranscriptionHistory(max_size=self._config.history_size)
         self._tray = SystemTray(history=self._history, parent=self)
+        self._indicator = RecordingIndicator()
 
         # Private thread pool for transcription — avoids polluting Qt's global pool
         self._pool = QThreadPool()
@@ -130,13 +117,20 @@ class SottoApp(QMainWindow):
         # from the main thread (via QTimer polling), so direct connection is fine.
         self._audio.audio_ready.connect(self._on_audio_ready)
         self._audio.level_changed.connect(self._tray.update_level)
+        self._audio.level_changed.connect(self._indicator.update_level)
         self._tray.quit_requested.connect(self._quit)
         self._tray.settings_requested.connect(self._show_settings)
 
         # Register hotkey: Ctrl+Space
         hwnd = int(self.winId())
         if not ctypes.windll.user32.RegisterHotKey(hwnd, HOTKEY_ID, MOD_CONTROL, VK_SPACE):
-            logger.error("Failed to register hotkey Ctrl+Space — may be in use by another app")
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                None, "Sotto — Hotkey Error",
+                "Failed to register Ctrl+Space.\n\n"
+                "Another application may be using this hotkey.",
+            )
+            sys.exit(1)
 
         # Eager model load
         logger.info("Loading whisper model '%s'...", self._backend.model_size)
@@ -246,6 +240,10 @@ class SottoApp(QMainWindow):
     def _update_state(self, state: AppState) -> None:
         self._state = state
         self._tray.update_state(state)
+        if self._config.show_indicator:
+            self._indicator.show_for_state(state)
+        elif state == AppState.IDLE:
+            self._indicator.hide()
 
     def _show_settings(self) -> None:
         """Open the settings dialog (single instance)."""
@@ -269,6 +267,8 @@ class SottoApp(QMainWindow):
         """Apply updated settings."""
         self._config = config
         self._history.resize(config.history_size)
+        if not config.show_indicator:
+            self._indicator.hide()
         logger.info("Settings updated")
 
     def _quit(self) -> None:

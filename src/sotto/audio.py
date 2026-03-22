@@ -151,7 +151,7 @@ class AudioCapture(QObject):
         # RMS level for UI — store for main thread to emit
         rms = float(np.sqrt(np.mean(chunk ** 2)))
         with self._flag_lock:
-            self._pending_level = min(rms * 5.0, 1.0)
+            self._pending_level = min(rms * 25.0, 1.0)
 
         # VAD inference
         if self._vad_model is not None:
