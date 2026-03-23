@@ -3,6 +3,7 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -13,6 +14,8 @@ from PySide6.QtWidgets import (
 )
 
 from sotto.config import SottoConfig
+from sotto.hotkey import parse_hotkey
+from sotto.transcribe import BACKENDS
 
 
 class SettingsDialog(QDialog):
@@ -48,6 +51,18 @@ class SettingsDialog(QDialog):
         self._initial_prompt.setToolTip("Comma-separated words to help Whisper recognize proper nouns")
         d_layout.addRow("Vocabulary hints:", self._initial_prompt)
 
+        self._backend_combo = QComboBox()
+        for name in sorted(BACKENDS.keys()):
+            self._backend_combo.addItem(name)
+        self._backend_combo.setCurrentText(config.backend)
+        self._backend_combo.setToolTip("Transcription engine (restart required to take effect)")
+        d_layout.addRow("Backend:", self._backend_combo)
+
+        self._hotkey = QLineEdit(config.hotkey)
+        self._hotkey.setPlaceholderText("e.g. ctrl+space, alt+shift+r")
+        self._hotkey.setToolTip("Modifier(s) + key, separated by '+' (restart required)")
+        d_layout.addRow("Hotkey:", self._hotkey)
+
         layout.addWidget(dictation)
 
         # -- Feedback group --
@@ -82,6 +97,13 @@ class SettingsDialog(QDialog):
         self._fallback_log.setChecked(config.fallback_log)
         h_layout.addRow(self._fallback_log)
 
+        self._retention_days = QSpinBox()
+        self._retention_days.setRange(1, 365)
+        self._retention_days.setSuffix(" days")
+        self._retention_days.setValue(config.log_retention_days)
+        self._retention_days.setToolTip("Entries older than this are pruned at startup")
+        h_layout.addRow("Log retention:", self._retention_days)
+
         layout.addWidget(history)
 
         # -- Buttons --
@@ -93,6 +115,20 @@ class SettingsDialog(QDialog):
         layout.addWidget(buttons)
 
     def _save(self) -> None:
+        # Validate hotkey before saving
+        hotkey_str = self._hotkey.text().strip()
+        if hotkey_str:
+            try:
+                parse_hotkey(hotkey_str)
+            except ValueError as e:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self, "Invalid Hotkey",
+                    f"Could not parse hotkey '{hotkey_str}':\n{e}\n\n"
+                    f"Examples: ctrl+space, alt+shift+r, ctrl+f10",
+                )
+                return
+
         new_config = SottoConfig(
             auto_paste=self._auto_paste.isChecked(),
             auto_paste_delay_ms=self._paste_delay.value(),
@@ -100,8 +136,11 @@ class SettingsDialog(QDialog):
             show_notifications=self._notifications.isChecked(),
             history_size=self._history_size.value(),
             fallback_log=self._fallback_log.isChecked(),
+            log_retention_days=self._retention_days.value(),
             initial_prompt=self._initial_prompt.text().strip(),
             show_indicator=self._indicator.isChecked(),
+            backend=self._backend_combo.currentText(),
+            hotkey=hotkey_str or self._config.hotkey,
         )
         new_config.save()
         self.config_changed.emit(new_config)

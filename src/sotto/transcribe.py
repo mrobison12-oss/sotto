@@ -1,5 +1,12 @@
-"""Transcription backend wrapping faster-whisper."""
+"""Transcription backend abstraction and implementations.
 
+To add a custom backend:
+1. Subclass TranscriptionBackend
+2. Implement load_model(), transcribe(), and unload_model()
+3. Register it in BACKENDS below
+"""
+
+import abc
 import logging
 import os
 import sys
@@ -7,7 +14,6 @@ import time
 from dataclasses import dataclass
 
 import numpy as np
-from faster_whisper import WhisperModel
 
 logger = logging.getLogger("sotto")
 
@@ -21,8 +27,39 @@ class TranscriptionResult:
     processing_seconds: float
 
 
-class WhisperBackend:
-    """Single-class whisper backend. No ABC until a second implementation exists."""
+class TranscriptionBackend(abc.ABC):
+    """Abstract base class for transcription backends.
+
+    Every backend must support three lifecycle methods:
+    - load_model(): one-time initialization (download weights, allocate GPU, etc.)
+    - transcribe(): convert audio → text
+    - unload_model(): release resources
+    """
+
+    @abc.abstractmethod
+    def load_model(self) -> None:
+        """Load the model into memory. Called once at startup."""
+
+    @abc.abstractmethod
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        sample_rate: int = 16000,
+        initial_prompt: str | None = None,
+    ) -> TranscriptionResult:
+        """Transcribe a float32 mono audio array to text."""
+
+    @abc.abstractmethod
+    def unload_model(self) -> None:
+        """Release model from memory."""
+
+
+# ---------------------------------------------------------------------------
+# faster-whisper backend (default)
+# ---------------------------------------------------------------------------
+
+class FasterWhisperBackend(TranscriptionBackend):
+    """Backend using CTranslate2-accelerated Whisper via faster-whisper."""
 
     def __init__(
         self,
@@ -35,10 +72,11 @@ class WhisperBackend:
         )
         self.device = device
         self.compute_type = compute_type
-        self._model: WhisperModel | None = None
+        self._model = None
 
     def load_model(self) -> None:
-        """Load the whisper model into memory. Call once at startup."""
+        from faster_whisper import WhisperModel
+
         try:
             self._model = WhisperModel(
                 self.model_size,
@@ -57,7 +95,6 @@ class WhisperBackend:
         self, audio: np.ndarray, sample_rate: int = 16000,
         initial_prompt: str | None = None,
     ) -> TranscriptionResult:
-        """Transcribe audio array to text."""
         if self._model is None:
             raise RuntimeError("Model not loaded — call load_model() first")
 
@@ -80,21 +117,61 @@ class WhisperBackend:
         text = " ".join(seg.text.strip() for seg in segments).strip()
         elapsed = time.perf_counter() - t0
 
+        # Extract plain dicts — avoid retaining CTranslate2 internal objects
+        plain_segments = [
+            {"text": seg.text, "start": seg.start, "end": seg.end}
+            for seg in segments
+        ]
+
         return TranscriptionResult(
             text=text,
             language=info.language,
-            segments=segments,
+            segments=plain_segments,
             duration_seconds=duration,
             processing_seconds=elapsed,
         )
 
     def unload_model(self) -> None:
-        """Release model from memory."""
         self._model = None
+        import gc
+        gc.collect()
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
 
-def create_backend() -> WhisperBackend:
-    """Factory function. Raises on unsupported platforms."""
+# ---------------------------------------------------------------------------
+# Backend registry and factory
+# ---------------------------------------------------------------------------
+
+# Maps config name → backend class. Add new backends here.
+BACKENDS: dict[str, type[TranscriptionBackend]] = {
+    "faster-whisper": FasterWhisperBackend,
+}
+
+# Keep the old name as an alias for backwards compat in existing code
+WhisperBackend = FasterWhisperBackend
+
+
+def create_backend(backend_name: str = "faster-whisper") -> TranscriptionBackend:
+    """Create a transcription backend by name.
+
+    Args:
+        backend_name: Key in BACKENDS registry. Defaults to 'faster-whisper'.
+
+    Raises:
+        NotImplementedError: On unsupported platforms.
+        ValueError: If backend_name is not in the registry.
+    """
     if sys.platform == "darwin":
-        raise NotImplementedError("MLX backend not yet implemented")
-    return WhisperBackend(device="auto")
+        raise NotImplementedError("macOS backend not yet implemented")
+
+    cls = BACKENDS.get(backend_name)
+    if cls is None:
+        available = ", ".join(sorted(BACKENDS.keys()))
+        raise ValueError(
+            f"Unknown backend '{backend_name}'. Available: {available}"
+        )
+    return cls(device="auto")

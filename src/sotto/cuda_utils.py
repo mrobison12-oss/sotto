@@ -18,5 +18,6 @@ def ensure_cuda_dlls() -> None:
             if os.path.isdir(bin_dir):
                 os.add_dll_directory(bin_dir)
                 os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger("sotto").debug("CUDA DLL setup skipped: %s", e)

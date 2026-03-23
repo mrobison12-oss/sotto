@@ -18,7 +18,7 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from sotto.indicator import PILL_H, PILL_W, RecordingIndicator
+from sotto.indicator import PILL_H, PILL_W, NUM_BARS, RecordingIndicator
 
 
 # ---------------------------------------------------------------------------
@@ -124,35 +124,56 @@ class TestVisualState:
     def test_level_zero_default(self, indicator):
         assert indicator._level == pytest.approx(0.0)
 
+    def test_update_level_appends_to_history(self, indicator):
+        indicator.show_for_state(AppState.LISTENING)
+        indicator.update_level(0.5)
+        indicator.update_level(0.8)
+        # Last two values should be at the end of the deque
+        levels = list(indicator._levels)
+        assert levels[-1] == pytest.approx(0.8)
+        assert levels[-2] == pytest.approx(0.5)
+
+    def test_level_history_resets_on_listening_entry(self, indicator):
+        indicator.show_for_state(AppState.LISTENING)
+        indicator.update_level(0.9)
+        # Re-enter listening — history should reset
+        indicator.show_for_state(AppState.IDLE)
+        indicator.show_for_state(AppState.LISTENING)
+        assert all(v == 0.0 for v in indicator._levels)
+
+    def test_level_history_maxlen(self, indicator):
+        indicator.show_for_state(AppState.LISTENING)
+        for i in range(NUM_BARS + 10):
+            indicator.update_level(float(i) / (NUM_BARS + 10))
+        assert len(indicator._levels) == NUM_BARS
+
 
 # ---------------------------------------------------------------------------
-# Pulse timer
+# Animation timer
 # ---------------------------------------------------------------------------
 
-class TestPulseTimer:
+class TestAnimTimer:
     def test_timer_starts_on_processing(self, indicator):
         indicator.show_for_state(AppState.PROCESSING)
-        assert indicator._pulse_timer.isActive()
+        assert indicator._anim_timer.isActive()
 
-    def test_timer_stops_on_listening(self, indicator):
-        indicator.show_for_state(AppState.PROCESSING)
-        assert indicator._pulse_timer.isActive()
-
+    def test_timer_starts_on_listening(self, indicator):
         indicator.show_for_state(AppState.LISTENING)
-        assert not indicator._pulse_timer.isActive()
+        assert indicator._anim_timer.isActive()
 
     def test_timer_stops_on_idle(self, indicator):
         indicator.show_for_state(AppState.PROCESSING)
-        assert indicator._pulse_timer.isActive()
+        assert indicator._anim_timer.isActive()
 
         indicator.show_for_state(AppState.IDLE)
-        assert not indicator._pulse_timer.isActive()
+        assert not indicator._anim_timer.isActive()
 
     def test_timer_not_running_initially(self, indicator):
-        assert not indicator._pulse_timer.isActive()
+        assert not indicator._anim_timer.isActive()
 
-    def test_timer_interval_is_fifty_ms(self, indicator):
-        assert indicator._pulse_timer.interval() == 50
+    def test_timer_interval_is_33ms(self, indicator):
+        """~30fps animation loop."""
+        assert indicator._anim_timer.interval() == 33
 
     def test_phase_resets_on_processing_entry(self, indicator):
         indicator.show_for_state(AppState.PROCESSING)
@@ -165,12 +186,12 @@ class TestPulseTimer:
     def test_tick_advances_phase(self, indicator):
         indicator.show_for_state(AppState.PROCESSING)
         phase_before = indicator._phase
-        indicator._tick_pulse()
+        indicator._tick()
         assert indicator._phase > phase_before
 
     def test_tick_phase_increment_value(self, indicator):
-        indicator._tick_pulse()
-        assert indicator._phase == pytest.approx(0.16)
+        indicator._tick()
+        assert indicator._phase == pytest.approx(0.08)
 
 
 # ---------------------------------------------------------------------------

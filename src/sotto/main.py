@@ -15,10 +15,11 @@ from PySide6.QtWidgets import QApplication, QMainWindow
 
 from sotto.audio import AudioCapture
 from sotto.config import SottoConfig
-from sotto.history import TranscriptionHistory
+from sotto.history import TranscriptionHistory, prune_log
 from sotto.paste import simulate_paste
 from sotto.transcribe import TranscriptionResult, create_backend
 from sotto.indicator import RecordingIndicator
+from sotto.hotkey import parse_hotkey, format_hotkey
 from sotto.tray import SystemTray
 from sotto import sounds
 
@@ -26,8 +27,6 @@ logger = logging.getLogger("sotto")
 
 # Windows constants
 WM_HOTKEY = 0x0312
-MOD_CONTROL = 0x0002
-VK_SPACE = 0x20
 HOTKEY_ID = 1
 
 
@@ -102,10 +101,28 @@ class SottoApp(QMainWindow):
         self._config = SottoConfig.load()
         self._state = AppState.IDLE
         self._shutting_down = False
-        self._backend = create_backend()
+
+        # Parse hotkey early so we can show it in the tray tooltip
+        try:
+            self._hk_mod, self._hk_vk = parse_hotkey(self._config.hotkey)
+        except ValueError as e:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                None, "Sotto — Hotkey Error",
+                f"Invalid hotkey '{self._config.hotkey}':\n{e}\n\n"
+                f"Fix the 'hotkey' field in ~/.sotto/config.json and restart.",
+            )
+            sys.exit(1)
+        self._hotkey_display = format_hotkey(self._hk_mod, self._hk_vk)
+
+        # Prune stale log entries on startup
+        if self._config.fallback_log and self._config.log_retention_days > 0:
+            prune_log(self._config.log_retention_days)
+
+        self._backend = create_backend(self._config.backend)
         self._audio = AudioCapture(parent=self)
         self._history = TranscriptionHistory(max_size=self._config.history_size)
-        self._tray = SystemTray(history=self._history, parent=self)
+        self._tray = SystemTray(history=self._history, hotkey_display=self._hotkey_display, parent=self)
         self._indicator = RecordingIndicator()
 
         # Private thread pool for transcription — avoids polluting Qt's global pool
@@ -128,16 +145,17 @@ class SottoApp(QMainWindow):
         self._tray.quit_requested.connect(self._quit)
         self._tray.settings_requested.connect(self._show_settings)
 
-        # Register hotkey: Ctrl+Space
+        # Register hotkey (parsed earlier during init)
         hwnd = int(self.winId())
-        if not ctypes.windll.user32.RegisterHotKey(hwnd, HOTKEY_ID, MOD_CONTROL, VK_SPACE):
+        if not ctypes.windll.user32.RegisterHotKey(hwnd, HOTKEY_ID, self._hk_mod, self._hk_vk):
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(
                 None, "Sotto — Hotkey Error",
-                "Failed to register Ctrl+Space.\n\n"
-                "Another application may be using this hotkey.",
+                f"Failed to register {self._hotkey_display}.\n\n"
+                f"Another application may be using this hotkey.",
             )
             sys.exit(1)
+        logger.info("Hotkey registered: %s", self._hotkey_display)
 
         self._tray.show()
         self._update_state(AppState.LOADING)

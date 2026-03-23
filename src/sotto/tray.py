@@ -21,12 +21,15 @@ COLORS = {
     "processing": QColor(50, 150, 220),   # Blue — thinking
 }
 
-TOOLTIPS = {
-    "loading": "Sotto — Loading model...",
-    "idle": "Sotto — Ready (Ctrl+Space)",
-    "listening": "Sotto — Listening...",
-    "processing": "Sotto — Transcribing...",
-}
+def _make_tooltips(hotkey_display: str = "Ctrl+Space") -> dict[str, str]:
+    return {
+        "loading": "Sotto — Loading model...",
+        "idle": f"Sotto — Ready ({hotkey_display})",
+        "listening": "Sotto — Listening...",
+        "processing": "Sotto — Transcribing...",
+    }
+
+TOOLTIPS = _make_tooltips()
 
 
 def _make_icon(color: QColor, level: float = 0.0) -> QIcon:
@@ -69,11 +72,12 @@ class SystemTray(QSystemTrayIcon):
     quit_requested = Signal()
     settings_requested = Signal()
 
-    def __init__(self, history: TranscriptionHistory, parent=None):
+    def __init__(self, history: TranscriptionHistory, hotkey_display: str = "Ctrl+Space", parent=None):
         super().__init__(parent)
         self._current_state = "idle"
         self._level = 0.0
         self._history = history
+        self._tooltips = _make_tooltips(hotkey_display)
 
         # Build context menu
         self._menu = QMenu()
@@ -89,14 +93,14 @@ class SystemTray(QSystemTrayIcon):
 
         # Initial icon
         self.setIcon(_make_icon(COLORS["idle"]))
-        self.setToolTip(TOOLTIPS["idle"])
+        self.setToolTip(self._tooltips["idle"])
 
     def update_state(self, state: AppState) -> None:
         """Update icon color and tooltip based on app state."""
         self._current_state = state.value
         self._level = 0.0
         self.setIcon(_make_icon(COLORS[state.value]))
-        self.setToolTip(TOOLTIPS[state.value])
+        self.setToolTip(self._tooltips[state.value])
 
     @Slot(float)
     def update_level(self, level: float) -> None:

@@ -80,12 +80,13 @@ class AudioCapture(QObject):
 
         with self._lock:
             self._chunks = []
-        self._speech_detected = False
-        self._silence_chunks = 0
-        self._chunk_count = 0
-        self._pending_stop = False
-        self._pending_level = None
-        self._recording = True
+        with self._flag_lock:
+            self._speech_detected = False
+            self._silence_chunks = 0
+            self._chunk_count = 0
+            self._pending_stop = False
+            self._pending_level = None
+            self._recording = True
 
         try:
             self._stream = sd.InputStream(
@@ -105,9 +106,10 @@ class AudioCapture(QObject):
 
     def stop(self) -> None:
         """Stop recording and emit audio_ready. Safe to call from main thread."""
-        if not self._recording:
-            return
-        self._recording = False
+        with self._flag_lock:
+            if not self._recording:
+                return
+            self._recording = False
         self._poll_timer.stop()
         if self._stream is not None:
             try:
@@ -141,26 +143,27 @@ class AudioCapture(QObject):
         IMPORTANT: Must not call stream.stop()/close() or emit Qt signals
         from here. Sets flags that the main-thread QTimer polls.
         """
-        if not self._recording or self._pending_stop:
-            return
+        with self._flag_lock:
+            if not self._recording or self._pending_stop:
+                return
 
         chunk = indata[:, 0].copy()  # mono float32
 
         with self._lock:
             self._chunks.append(chunk)
 
-        # Max recording duration safety
-        self._chunk_count += 1
-        if self._chunk_count >= self._max_chunks:
-            logger.warning("Max recording duration reached (%.0fs), auto-stopping",
-                           self._max_chunks * CHUNK_SAMPLES / SAMPLE_RATE)
-            with self._flag_lock:
-                self._pending_stop = True
-            return
-
         # RMS level for UI — store for main thread to emit
         rms = float(np.sqrt(np.mean(chunk ** 2)))
+
         with self._flag_lock:
+            # Max recording duration safety
+            self._chunk_count += 1
+            if self._chunk_count >= self._max_chunks:
+                logger.warning("Max recording duration reached (%.0fs), auto-stopping",
+                               self._max_chunks * CHUNK_SAMPLES / SAMPLE_RATE)
+                self._pending_stop = True
+                return
+
             self._pending_level = min(rms * 25.0, 1.0)
 
         # VAD inference
@@ -168,17 +171,19 @@ class AudioCapture(QObject):
             try:
                 speech_prob = self._vad_model(torch.from_numpy(chunk), SAMPLE_RATE).item()
             except Exception as e:
-                if self._chunk_count % 100 == 1:
-                    logger.error("VAD inference failed: %s", e)
+                with self._flag_lock:
+                    if self._chunk_count % 100 == 1:
+                        logger.error("VAD inference failed: %s", e)
                 return
-            if speech_prob > 0.5:
-                self._speech_detected = True
-                self._silence_chunks = 0
-            elif self._speech_detected:
-                self._silence_chunks += 1
-                if self._silence_chunks >= self._silence_threshold:
-                    logger.info("VAD silence threshold reached, auto-stopping")
-                    with self._flag_lock:
+
+            with self._flag_lock:
+                if speech_prob > 0.5:
+                    self._speech_detected = True
+                    self._silence_chunks = 0
+                elif self._speech_detected:
+                    self._silence_chunks += 1
+                    if self._silence_chunks >= self._silence_threshold:
+                        logger.info("VAD silence threshold reached, auto-stopping")
                         self._pending_stop = True
 
     def _emit_audio(self) -> None:

@@ -21,8 +21,11 @@ class SottoConfig:
     show_notifications: bool = True
     history_size: int = 10
     fallback_log: bool = True
+    log_retention_days: int = 30
     initial_prompt: str = "Sotto, Claude, Obsidian"
     show_indicator: bool = True
+    backend: str = "faster-whisper"
+    hotkey: str = "ctrl+space"
 
     def save(self) -> None:
         """Persist current config to disk."""
