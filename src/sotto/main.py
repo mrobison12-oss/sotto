@@ -4,6 +4,7 @@ import ctypes
 import ctypes.wintypes
 import enum
 import logging
+import os
 import sys
 
 from sotto.cuda_utils import ensure_cuda_dlls
@@ -21,7 +22,7 @@ from sotto.transcribe import TranscriptionResult, create_backend
 from sotto.indicator import RecordingIndicator
 from sotto.hotkey import parse_hotkey, format_hotkey
 from sotto.tray import SystemTray
-from sotto import sounds
+from sotto import hardware, sounds
 
 logger = logging.getLogger("sotto")
 
@@ -115,11 +116,21 @@ class SottoApp(QMainWindow):
             sys.exit(1)
         self._hotkey_display = format_hotkey(self._hk_mod, self._hk_vk)
 
+        # Auto-select model on first launch if not configured and no env override
+        self._first_launch_message: str | None = None
+        if not self._config.model and not os.environ.get("SOTTO_MODEL"):
+            profile = hardware.detect_hardware()
+            model, description = hardware.select_model(profile)
+            self._config.model = model
+            self._config.save()
+            self._first_launch_message = description
+            logger.info("Auto-selected model: %s", description)
+
         # Prune stale log entries on startup
         if self._config.fallback_log and self._config.log_retention_days > 0:
             prune_log(self._config.log_retention_days)
 
-        self._backend = create_backend(self._config.backend)
+        self._backend = create_backend(self._config.backend, model_size=self._config.model or None)
         self._audio = AudioCapture(parent=self)
         self._history = TranscriptionHistory(max_size=self._config.history_size)
         self._tray = SystemTray(history=self._history, hotkey_display=self._hotkey_display, parent=self)
@@ -188,6 +199,13 @@ class SottoApp(QMainWindow):
     @Slot()
     def _on_models_loaded(self) -> None:
         self._update_state(AppState.IDLE)
+        if self._first_launch_message:
+            self._tray.show_toast(
+                "Sotto — Model Selected",
+                self._first_launch_message,
+                duration_ms=8000,
+            )
+            self._first_launch_message = None
 
     @Slot(str)
     def _on_model_load_failed(self, error: str) -> None:

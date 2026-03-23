@@ -155,7 +155,7 @@ BACKENDS: dict[str, type[TranscriptionBackend]] = {
 WhisperBackend = FasterWhisperBackend
 
 
-def create_backend(backend_name: str = "faster-whisper") -> TranscriptionBackend:
+def create_backend(backend_name: str = "faster-whisper", model_size: str | None = None) -> TranscriptionBackend:
     """Create a transcription backend by name.
 
     Args:
@@ -174,4 +174,4 @@ def create_backend(backend_name: str = "faster-whisper") -> TranscriptionBackend
         raise ValueError(
             f"Unknown backend '{backend_name}'. Available: {available}"
         )
-    return cls(device="auto")
+    return cls(device="auto", model_size=model_size or None)

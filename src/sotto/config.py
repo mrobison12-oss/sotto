@@ -24,6 +24,7 @@ class SottoConfig:
     log_retention_days: int = 30
     initial_prompt: str = "Sotto, Claude, Obsidian"
     show_indicator: bool = True
+    model: str = ""  # empty = auto-select on first launch
     backend: str = "faster-whisper"
     hotkey: str = "ctrl+space"
 

@@ -34,7 +34,7 @@ Everything runs locally. Audio never leaves your machine.
 - **Windows 10/11**
 - **Python 3.10+**
 - **~800 MB disk** for the default Whisper model (downloaded on first launch)
-- **NVIDIA GPU recommended** — transcription is 10-25x faster with CUDA. CPU works but is significantly slower.
+- **NVIDIA GPU recommended** — transcription is 10-25x faster with CUDA. CPU works but Sotto will automatically select a smaller, faster model to keep latency reasonable.
 
 ## Installation
 
@@ -108,6 +108,7 @@ Settings are stored in `~/.sotto/config.json` and can be edited via the tray men
 | `fallback_log` | `true` | Log transcriptions to `~/.sotto/transcriptions.log` |
 | `log_retention_days` | `30` | Auto-prune log entries older than this at startup |
 | `initial_prompt` | `"Sotto, Claude, Obsidian"` | Comma-separated vocabulary hints for Whisper (helps with proper nouns) |
+| `model` | `""` (auto) | Whisper model — auto-selected based on GPU on first launch. Set manually to override |
 | `backend` | `"faster-whisper"` | Transcription backend (see below) |
 | `hotkey` | `"ctrl+space"` | System-wide hotkey to toggle recording (restart required) |
 
@@ -196,26 +197,23 @@ src/sotto/
 ├── paste.py         — Windows SendInput for auto-paste
 ├── settings_ui.py   — Settings dialog
 ├── sounds.py        — Procedurally generated audio cues
-└── cuda_utils.py    — CUDA DLL path resolution
+├── cuda_utils.py    — CUDA DLL path resolution
+└── hardware.py      — GPU detection and model auto-selection
 ```
 
 ## Resource usage
 
-Sotto keeps the Whisper model loaded in VRAM (GPU memory) for instant transcription. The default `large-v3-turbo` model uses roughly **1.5–2 GB of VRAM**. This memory stays allocated as long as Sotto is running.
+Sotto keeps the Whisper model loaded in VRAM (GPU memory) for instant transcription. On first launch, Sotto **automatically detects your hardware** and selects the best model for your GPU — you'll see a notification confirming what was chosen.
 
-**If you're gaming or running other GPU-intensive applications**, this VRAM pressure can reduce available memory for textures, frame buffers, and shader caches — potentially lowering frame rates or causing stuttering. Close Sotto from the system tray (right-click → Quit) before launching demanding games or GPU workloads, and restart it afterward.
+| VRAM | Auto-selected model | Accuracy |
+|------|---------------------|----------|
+| 6+ GB | `large-v3-turbo` | Best |
+| 3–6 GB | `distil-large-v3` | Very good |
+| No CUDA GPU | `base` | Good (CPU mode) |
 
-Smaller models use less VRAM if you want to leave Sotto running:
+This VRAM stays allocated as long as Sotto is running. **If you're gaming or running other GPU-intensive applications**, close Sotto from the system tray (right-click → Quit) before launching demanding games, and restart it afterward.
 
-| Model | VRAM (approx.) | Accuracy tradeoff |
-|-------|---------------|-------------------|
-| `tiny` | ~150 MB | Significantly lower accuracy |
-| `base` | ~300 MB | Lower accuracy |
-| `small` | ~500 MB | Moderate accuracy |
-| `medium` | ~1 GB | Good accuracy |
-| `large-v3-turbo` | ~1.5 GB | Best (default) |
-
-Set the model via environment variable: `SOTTO_MODEL=small sotto`
+To manually override model selection, set `"model"` in `~/.sotto/config.json` or use the `SOTTO_MODEL` environment variable.
 
 ## License
 
