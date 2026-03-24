@@ -287,7 +287,7 @@ class SottoApp(QMainWindow):
         # Check if audio is mostly silence — skip transcription to avoid
         # Whisper hallucinating the initial_prompt as output
         rms = float(np.sqrt(np.mean(audio ** 2)))
-        if rms < 0.005:
+        if rms < 0.001:
             logger.info("Audio too quiet (RMS=%.4f), skipping transcription", rms)
             self._update_state(AppState.IDLE)
             return
