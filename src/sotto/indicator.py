@@ -1,4 +1,4 @@
-"""Transient recording indicator — translucent pill with waveform visualizer."""
+"""Transient recording indicator — translucent frosted pill with waveform visualizer."""
 
 from __future__ import annotations
 
@@ -15,36 +15,36 @@ from PySide6.QtWidgets import QApplication, QWidget
 if TYPE_CHECKING:
     from sotto.main import AppState
 
-# Pill dimensions
-PILL_W = 160
-PILL_H = 44
+# Pill dimensions — compact and modern
+PILL_W = 96
+PILL_H = 36
 PILL_RADIUS = PILL_H // 2
 
 # Waveform config
-NUM_BARS = 20          # number of vertical bars in the visualizer
-BAR_GAP = 1            # px between bars
-WAVEFORM_LEFT = 38     # start x (after the dot)
-WAVEFORM_RIGHT = PILL_W - 14  # end x
+NUM_BARS = 14
+BAR_GAP = 1
+WAVEFORM_LEFT = 30
+WAVEFORM_RIGHT = PILL_W - 10
 BAR_REGION_W = WAVEFORM_RIGHT - WAVEFORM_LEFT
 BAR_W = max(1, (BAR_REGION_W - (NUM_BARS - 1) * BAR_GAP) // NUM_BARS)
-MAX_BAR_H = (PILL_H - 8) // 2  # max half-height — tighter vertical margin for bigger bars
+MAX_BAR_H = (PILL_H - 10) // 2
 
-# Colors
-COLOR_BG = QColor(20, 20, 24, 210)
-COLOR_BG_BORDER = QColor(60, 60, 68, 120)
+# Colors — frosted glass background
+COLOR_BG = QColor(255, 255, 255, 115)
+COLOR_BG_BORDER = QColor(255, 255, 255, 60)
 
-# Listening — warm red/coral gradient
-COLOR_DOT = QColor(235, 60, 55)
-COLOR_DOT_GLOW = QColor(235, 60, 55, 60)
-COLOR_BAR_BASE = QColor(180, 40, 40)         # center of bar (dark)
-COLOR_BAR_TIP = QColor(255, 100, 60)         # tip of bar (bright coral)
-COLOR_BAR_PEAK = QColor(255, 180, 80)        # loudest bars get orange-gold tips
-COLOR_BAR_TRACK = QColor(255, 255, 255, 18)  # ghost track
+# Listening — deep purple palette
+COLOR_DOT = QColor(140, 80, 220)
+COLOR_DOT_GLOW = QColor(140, 80, 220, 50)
+COLOR_BAR_BASE = QColor(100, 50, 180)
+COLOR_BAR_TIP = QColor(170, 120, 255)
+COLOR_BAR_PEAK = QColor(200, 160, 255)
+COLOR_BAR_TRACK = QColor(255, 255, 255, 12)
 
-# Processing — cool blue wave
-COLOR_WAVE_BASE = QColor(40, 120, 200)
-COLOR_WAVE_TIP = QColor(100, 200, 255)
-COLOR_WAVE_GLOW = QColor(80, 170, 255, 40)
+# Processing — soft violet wave
+COLOR_WAVE_BASE = QColor(90, 60, 160)
+COLOR_WAVE_TIP = QColor(160, 130, 240)
+COLOR_WAVE_GLOW = QColor(130, 100, 220, 35)
 
 
 class RecordingIndicator(QWidget):
@@ -126,27 +126,27 @@ class RecordingIndicator(QWidget):
             painter.end()
 
     def _paint_pill_bg(self, painter: QPainter) -> None:
-        """Draw the rounded pill background with subtle border."""
+        """Draw frosted glass pill background."""
         path = QPainterPath()
         path.addRoundedRect(
             QRectF(0.5, 0.5, PILL_W - 1, PILL_H - 1),
             PILL_RADIUS, PILL_RADIUS,
         )
         painter.fillPath(path, COLOR_BG)
-        painter.setPen(QPen(COLOR_BG_BORDER, 1.0))
+        painter.setPen(QPen(COLOR_BG_BORDER, 0.5))
         painter.drawPath(path)
 
     def _paint_listening(self, painter: QPainter) -> None:
-        """Red recording dot + mirrored waveform bars with gradient."""
+        """Purple recording dot + mirrored waveform bars."""
         cy = PILL_H / 2.0
 
         # --- Recording dot with glow ---
-        dot_r = 5.5 + 0.8 * math.sin(self._dot_phase)
-        dot_cx = 20.0
+        dot_r = 4.0 + 0.6 * math.sin(self._dot_phase)
+        dot_cx = 15.0
         dot_cy = cy
 
         # Glow behind dot
-        glow_r = dot_r + 4
+        glow_r = dot_r + 3
         glow_grad = QLinearGradient(
             QPointF(dot_cx - glow_r, dot_cy),
             QPointF(dot_cx + glow_r, dot_cy),
@@ -179,12 +179,11 @@ class RecordingIndicator(QWidget):
             level = self._display_levels[i]
 
             bar_x = WAVEFORM_LEFT + i * (BAR_W + BAR_GAP)
-            # Amplify so normal speech fills more of the range
             boosted = min(level * 1.5, 1.0)
-            half_h = max(1.0, boosted * MAX_BAR_H)
+            half_h = max(0.5, boosted * MAX_BAR_H)
 
-            # Ghost track (faint background bar showing max range)
-            track_half = MAX_BAR_H * 0.6
+            # Ghost track
+            track_half = MAX_BAR_H * 0.5
             painter.fillRect(
                 QRectF(bar_x, cy - track_half, BAR_W, track_half * 2),
                 COLOR_BAR_TRACK,
@@ -196,7 +195,6 @@ class RecordingIndicator(QWidget):
                     QPointF(bar_x, cy - half_h),
                     QPointF(bar_x, cy + half_h),
                 )
-                # Pick tip color based on intensity
                 tip_color = (
                     COLOR_BAR_PEAK if boosted > 0.65
                     else COLOR_BAR_TIP
@@ -212,12 +210,12 @@ class RecordingIndicator(QWidget):
                 )
 
     def _paint_processing(self, painter: QPainter) -> None:
-        """Flowing sine wave across the pill — cool blue gradient."""
+        """Flowing sine wave across the pill — soft violet gradient."""
         cy = PILL_H / 2.0
-        wave_left = 16.0
-        wave_right = PILL_W - 16.0
+        wave_left = 12.0
+        wave_right = PILL_W - 12.0
         wave_w = wave_right - wave_left
-        num_points = 60
+        num_points = 48
 
         # Build wave path
         path = QPainterPath()
@@ -228,38 +226,30 @@ class RecordingIndicator(QWidget):
             t = i / num_points
             x = wave_left + t * wave_w
 
-            # Composite wave: main sine + harmonic + traveling component
-            amplitude = 6.0 + 3.0 * math.sin(self._phase * 0.4 + t * math.pi)
+            amplitude = 4.5 + 2.0 * math.sin(self._phase * 0.4 + t * math.pi)
             y_offset = (
                 math.sin(self._phase + t * math.pi * 3.0) * amplitude
                 + math.sin(self._phase * 1.7 + t * math.pi * 5.0) * amplitude * 0.3
             )
 
-            # Taper at edges for clean look
+            # Taper at edges
             edge_fade = min(t * 5.0, (1.0 - t) * 5.0, 1.0)
             y_offset *= edge_fade
 
             points_top.append(QPointF(x, cy + y_offset))
             points_bot.append(QPointF(x, cy - y_offset))
 
-        # Top wave
         path.moveTo(points_top[0])
         for pt in points_top[1:]:
             path.lineTo(pt)
-        # Connect back along bottom wave (reversed) to form filled shape
         for pt in reversed(points_bot):
             path.lineTo(pt)
         path.closeSubpath()
 
-        # Glow layer (wider, translucent)
-        glow_pen = QPen(COLOR_WAVE_GLOW, 6.0)
-        glow_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(Qt.PenStyle.NoPen)
-
         # Fill with gradient
         grad = QLinearGradient(
-            QPointF(wave_left, cy - 12),
-            QPointF(wave_left, cy + 12),
+            QPointF(wave_left, cy - 10),
+            QPointF(wave_left, cy + 10),
         )
         grad.setColorAt(0.0, COLOR_WAVE_TIP)
         grad.setColorAt(0.35, COLOR_WAVE_BASE)
@@ -268,13 +258,13 @@ class RecordingIndicator(QWidget):
 
         # Glow behind
         glow_fill = QLinearGradient(
-            QPointF(wave_left, cy - 16),
-            QPointF(wave_left, cy + 16),
+            QPointF(wave_left, cy - 14),
+            QPointF(wave_left, cy + 14),
         )
-        glow_fill.setColorAt(0.0, QColor(80, 170, 255, 0))
+        glow_fill.setColorAt(0.0, QColor(130, 100, 220, 0))
         glow_fill.setColorAt(0.3, COLOR_WAVE_GLOW)
         glow_fill.setColorAt(0.7, COLOR_WAVE_GLOW)
-        glow_fill.setColorAt(1.0, QColor(80, 170, 255, 0))
+        glow_fill.setColorAt(1.0, QColor(130, 100, 220, 0))
         painter.fillPath(path, glow_fill)
 
         # Main wave fill
@@ -285,7 +275,7 @@ class RecordingIndicator(QWidget):
         center_path.moveTo(points_top[0])
         for pt in points_top[1:]:
             center_path.lineTo(pt)
-        painter.setPen(QPen(QColor(180, 220, 255, 160), 1.2))
+        painter.setPen(QPen(QColor(200, 180, 255, 140), 0.8))
         painter.drawPath(center_path)
 
     def _tick(self) -> None:

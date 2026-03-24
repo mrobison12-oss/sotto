@@ -308,13 +308,25 @@ class SottoApp(QMainWindow):
 
     @Slot(TranscriptionResult)
     def _is_hallucination(self, text: str) -> bool:
-        """Detect if Whisper hallucinated the initial prompt instead of real speech."""
-        if not self._config.initial_prompt:
-            return False
-        # Check if output is just the prompt words (possibly reordered/partial)
-        prompt_words = {w.strip().lower() for w in self._config.initial_prompt.split(",")}
-        text_words = {w.strip(".,!? ").lower() for w in text.split()}
-        return len(text_words) > 0 and text_words.issubset(prompt_words)
+        """Detect Whisper hallucinations: prompt echo or repetition loops."""
+        # Check 1: output is just the prompt words (possibly reordered/partial)
+        if self._config.initial_prompt:
+            prompt_words = {w.strip().lower() for w in self._config.initial_prompt.split(",")}
+            text_words = {w.strip(".,!? ").lower() for w in text.split()}
+            if len(text_words) > 0 and text_words.issubset(prompt_words):
+                return True
+
+        # Check 2: repetition loop — same short word/phrase repeated excessively
+        words = text.split()
+        if len(words) > 10:
+            # Count most common word — if it's >60% of all words, it's a loop
+            from collections import Counter
+            counts = Counter(w.lower().strip(".,!? ") for w in words)
+            most_common_count = counts.most_common(1)[0][1]
+            if most_common_count > len(words) * 0.6:
+                return True
+
+        return False
 
     @Slot(TranscriptionResult)
     def _on_transcription_done(self, result: TranscriptionResult) -> None:
