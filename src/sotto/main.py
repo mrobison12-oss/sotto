@@ -29,7 +29,8 @@ logger = logging.getLogger("sotto")
 
 # Windows constants
 WM_HOTKEY = 0x0312
-HOTKEY_ID = 1
+HOTKEY_ID_DICTATE = 1
+HOTKEY_ID_QUICKNOTE = 2
 
 
 class AppState(enum.Enum):
@@ -108,7 +109,7 @@ class SottoApp(QMainWindow):
         self._state = AppState.IDLE
         self._shutting_down = False
 
-        # Parse hotkey early so we can show it in the tray tooltip
+        # Parse hotkeys early so we can show them in the tray tooltip
         try:
             self._hk_mod, self._hk_vk = parse_hotkey(self._config.hotkey)
         except ValueError as e:
@@ -120,6 +121,16 @@ class SottoApp(QMainWindow):
             )
             sys.exit(1)
         self._hotkey_display = format_hotkey(self._hk_mod, self._hk_vk)
+
+        # Quick note hotkey (optional — only registered if path is configured)
+        self._qn_mod = self._qn_vk = None
+        self._quick_note_active = False  # True when current recording is a quick note
+        if self._config.quick_note_path:
+            try:
+                self._qn_mod, self._qn_vk = parse_hotkey(self._config.quick_note_hotkey)
+            except ValueError as e:
+                logger.warning("Invalid quick_note_hotkey '%s': %s — quick notes disabled",
+                               self._config.quick_note_hotkey, e)
 
         # Auto-select model on first launch if not configured and no env override
         self._first_launch_message: str | None = None
@@ -168,9 +179,9 @@ class SottoApp(QMainWindow):
         self._tray.quit_requested.connect(self._quit)
         self._tray.settings_requested.connect(self._show_settings)
 
-        # Register hotkey (parsed earlier during init)
+        # Register hotkeys (parsed earlier during init)
         hwnd = int(self.winId())
-        if not ctypes.windll.user32.RegisterHotKey(hwnd, HOTKEY_ID, self._hk_mod, self._hk_vk):
+        if not ctypes.windll.user32.RegisterHotKey(hwnd, HOTKEY_ID_DICTATE, self._hk_mod, self._hk_vk):
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(
                 None, "Sotto — Hotkey Error",
@@ -179,6 +190,14 @@ class SottoApp(QMainWindow):
             )
             sys.exit(1)
         logger.info("Hotkey registered: %s", self._hotkey_display)
+
+        if self._qn_mod is not None:
+            qn_display = format_hotkey(self._qn_mod, self._qn_vk)
+            if not ctypes.windll.user32.RegisterHotKey(hwnd, HOTKEY_ID_QUICKNOTE, self._qn_mod, self._qn_vk):
+                logger.warning("Failed to register quick note hotkey %s — quick notes disabled", qn_display)
+                self._qn_mod = self._qn_vk = None
+            else:
+                logger.info("Quick note hotkey registered: %s", qn_display)
 
         self._tray.show()
         self._update_state(AppState.LOADING)
@@ -201,9 +220,13 @@ class SottoApp(QMainWindow):
         """Handle WM_HOTKEY from RegisterHotKey."""
         if event_type == b"windows_generic_MSG":
             msg = ctypes.wintypes.MSG.from_address(int(message))
-            if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
-                self._on_hotkey()
-                return True, 0
+            if msg.message == WM_HOTKEY:
+                if msg.wParam == HOTKEY_ID_DICTATE:
+                    self._on_hotkey(quick_note=False)
+                    return True, 0
+                elif msg.wParam == HOTKEY_ID_QUICKNOTE:
+                    self._on_hotkey(quick_note=True)
+                    return True, 0
         return super().nativeEvent(event_type, message)
 
     def _load_models(self) -> None:
@@ -258,9 +281,19 @@ class SottoApp(QMainWindow):
         )
         sys.exit(1)
 
-    def _on_hotkey(self) -> None:
+    def _on_hotkey(self, quick_note: bool = False) -> None:
         """Toggle recording on hotkey press."""
         if self._state == AppState.IDLE:
+            self._quick_note_active = quick_note
+            if quick_note:
+                # Use longer thresholds for journal-style recording
+                self._audio.update_thresholds(
+                    self._config.quick_note_silence_seconds,
+                    self._config.quick_note_max_seconds,
+                )
+                logger.info("Quick note recording started (silence=%.1fs, max=%.0fs)",
+                            self._config.quick_note_silence_seconds,
+                            self._config.quick_note_max_seconds)
             self._update_state(AppState.LISTENING)
             if self._config.audio_cues:
                 sounds.play("start")
@@ -269,6 +302,12 @@ class SottoApp(QMainWindow):
             self._audio.stop()
             if self._config.audio_cues:
                 sounds.play("stop")
+            # Restore normal thresholds if we were in quick note mode
+            if self._quick_note_active:
+                self._audio.update_thresholds(
+                    self._config.vad_silence_seconds,
+                    self._config.max_record_seconds,
+                )
         # If PROCESSING or CONFIRMING, ignore hotkey
 
     @Slot(np.ndarray)
@@ -357,7 +396,10 @@ class SottoApp(QMainWindow):
                 result.text[:80],
             )
 
-            if self._config.confirmation_mode:
+            if self._quick_note_active:
+                self._quick_note_active = False
+                self._append_quick_note(result.text)
+            elif self._config.confirmation_mode:
                 # Show preview window — user decides whether to paste
                 logger.info("Confirmation mode ON — showing preview window")
                 self._current_signals = None
@@ -382,6 +424,33 @@ class SottoApp(QMainWindow):
 
         if self._config.auto_paste:
             _paste_after_delay(self._config.auto_paste_delay_ms)
+
+    def _append_quick_note(self, text: str) -> None:
+        """Append transcription to the daily quick note file."""
+        from datetime import datetime
+        from pathlib import Path
+
+        now = datetime.now()
+        path_str = self._config.quick_note_path.replace("{date}", now.strftime("%Y-%m-%d"))
+        path = Path(path_str)
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            is_new = not path.exists()
+
+            with open(path, "a", encoding="utf-8") as f:
+                if is_new:
+                    f.write(f"# Voice Notes — {now.strftime('%Y-%m-%d')}\n\n")
+                f.write(f"## {now.strftime('%I:%M %p')}\n\n")
+                f.write(f"{text}\n\n---\n\n")
+
+            logger.info("Quick note appended to %s", path)
+            if self._config.show_notifications:
+                self._tray.show_toast("Sotto — Note Saved", text[:120])
+        except Exception as e:
+            logger.error("Failed to write quick note: %s", e)
+            if self._config.audio_cues:
+                sounds.play("error")
 
     @Slot(str)
     def _on_preview_accepted(self, text: str) -> None:
@@ -452,7 +521,9 @@ class SottoApp(QMainWindow):
         if self._shutting_down:
             return
         self._shutting_down = True
-        ctypes.windll.user32.UnregisterHotKey(int(self.winId()), HOTKEY_ID)
+        hwnd = int(self.winId())
+        ctypes.windll.user32.UnregisterHotKey(hwnd, HOTKEY_ID_DICTATE)
+        ctypes.windll.user32.UnregisterHotKey(hwnd, HOTKEY_ID_QUICKNOTE)
         # Stop active recording so no new tasks are submitted
         self._audio.stop()
         # Wait for in-flight transcription before destroying the model

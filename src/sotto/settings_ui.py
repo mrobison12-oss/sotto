@@ -145,6 +145,38 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(history)
 
+        # -- Quick Note group --
+        qn = QGroupBox("Quick Note")
+        qn_layout = QFormLayout(qn)
+
+        self._qn_path = QLineEdit(config.quick_note_path)
+        self._qn_path.setPlaceholderText("e.g. C:/Users/You/Vault/00-inbox/Voice Notes {date}.md")
+        self._qn_path.setToolTip("File path for voice notes. {date} expands to YYYY-MM-DD. Leave empty to disable.")
+        qn_layout.addRow("Note path:", self._qn_path)
+
+        self._qn_hotkey = QLineEdit(config.quick_note_hotkey)
+        self._qn_hotkey.setPlaceholderText("e.g. ctrl+shift+space")
+        self._qn_hotkey.setToolTip("Hotkey to start a quick note recording (restart required)")
+        qn_layout.addRow("Hotkey:", self._qn_hotkey)
+
+        self._qn_silence = QDoubleSpinBox()
+        self._qn_silence.setRange(1.0, 30.0)
+        self._qn_silence.setSingleStep(0.5)
+        self._qn_silence.setSuffix(" s")
+        self._qn_silence.setValue(config.quick_note_silence_seconds)
+        self._qn_silence.setToolTip("Longer silence threshold for journal-style dictation")
+        qn_layout.addRow("Silence threshold:", self._qn_silence)
+
+        self._qn_max = QDoubleSpinBox()
+        self._qn_max.setRange(30.0, 600.0)
+        self._qn_max.setSingleStep(30.0)
+        self._qn_max.setSuffix(" s")
+        self._qn_max.setValue(config.quick_note_max_seconds)
+        self._qn_max.setToolTip("Maximum recording duration for quick notes")
+        qn_layout.addRow("Max recording:", self._qn_max)
+
+        layout.addWidget(qn)
+
         # -- System group --
         system = QGroupBox("System")
         s_layout = QFormLayout(system)
@@ -197,6 +229,10 @@ class SettingsDialog(QDialog):
             vad_silence_seconds=self._vad_silence.value(),
             max_record_seconds=self._max_record.value(),
             start_with_windows=self._start_with_windows.isChecked(),
+            quick_note_hotkey=self._qn_hotkey.text().strip() or self._config.quick_note_hotkey,
+            quick_note_path=self._qn_path.text().strip(),
+            quick_note_silence_seconds=self._qn_silence.value(),
+            quick_note_max_seconds=self._qn_max.value(),
         )
 
         # Apply startup change immediately via registry

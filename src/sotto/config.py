@@ -23,7 +23,7 @@ class SottoConfig:
     history_size: int = 10
     fallback_log: bool = True
     log_retention_days: int = 30
-    initial_prompt: str = "Sotto, Claude, Obsidian"
+    initial_prompt: str = "Hello, I'm using Sotto to transcribe my speech. This is a quick note about the project we discussed earlier."
     show_indicator: bool = True
     model: str = ""  # empty = auto-select on first launch
     backend: str = "faster-whisper"
@@ -32,6 +32,11 @@ class SottoConfig:
     vad_silence_seconds: float = 2.0
     max_record_seconds: float = 120.0
     start_with_windows: bool = False
+    # Quick Note — second hotkey that appends to a daily note file
+    quick_note_hotkey: str = "ctrl+shift+space"
+    quick_note_path: str = ""  # e.g. "C:/Users/Matt/Documents/vault/00-inbox/Voice Notes {date}.md"
+    quick_note_silence_seconds: float = 4.0
+    quick_note_max_seconds: float = 300.0
 
     def save(self) -> None:
         """Persist current config to disk."""
