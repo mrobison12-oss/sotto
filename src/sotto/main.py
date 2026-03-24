@@ -306,7 +306,6 @@ class SottoApp(QMainWindow):
         task = TranscriptionTask(self._backend, audio, signals, initial_prompt=prompt, language=language)
         self._pool.start(task)  # task may complete instantly — signals ref must already be held
 
-    @Slot(TranscriptionResult)
     def _is_hallucination(self, text: str) -> bool:
         """Detect Whisper hallucinations: prompt echo or repetition loops."""
         # Check 1: output is just the prompt words (possibly reordered/partial)
@@ -479,6 +478,13 @@ def main():
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # Keep running with just tray icon
+
+    # Set application icon (used for settings dialog taskbar entry, etc.)
+    from pathlib import Path
+    icon_path = Path(__file__).resolve().parent.parent.parent / "assets" / "icon_64.png"
+    if icon_path.exists():
+        from PySide6.QtGui import QIcon
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     window = SottoApp()  # noqa: F841 — prevent GC
     sys.exit(app.exec())
