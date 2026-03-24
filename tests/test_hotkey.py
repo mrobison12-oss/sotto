@@ -31,7 +31,7 @@ class TestParseHotkey:
     def test_alt_d(self):
         mod, vk = parse_hotkey("alt+d")
         assert mod == MOD_ALT
-        assert vk == ord("d")
+        assert vk == ord("D")  # Windows VK codes use uppercase
 
     def test_ctrl_alt_shift_win(self):
         mod, vk = parse_hotkey("ctrl+alt+shift+win+a")

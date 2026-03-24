@@ -94,6 +94,7 @@ class FasterWhisperBackend(TranscriptionBackend):
     def transcribe(
         self, audio: np.ndarray, sample_rate: int = 16000,
         initial_prompt: str | None = None,
+        language: str | None = None,
     ) -> TranscriptionResult:
         if self._model is None:
             raise RuntimeError("Model not loaded — call load_model() first")
@@ -101,12 +102,15 @@ class FasterWhisperBackend(TranscriptionBackend):
         duration = len(audio) / sample_rate
         t0 = time.perf_counter()
 
+        # Env var overrides config-provided language
+        effective_language = os.environ.get("SOTTO_LANGUAGE") or language or None
+
         try:
             segments_iter, info = self._model.transcribe(
                 audio,
-                language=os.environ.get("SOTTO_LANGUAGE"),
+                language=effective_language,
                 beam_size=5,
-                word_timestamps=True,
+                word_timestamps=False,
                 initial_prompt=initial_prompt or None,
             )
             segments = list(segments_iter)

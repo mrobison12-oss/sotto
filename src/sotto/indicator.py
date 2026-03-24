@@ -86,7 +86,7 @@ class RecordingIndicator(QWidget):
         self._state = state.value
         self._level = 0.0
 
-        if self._state in ("idle", "loading"):
+        if self._state in ("idle", "loading", "confirming"):
             self._anim_timer.stop()
             self.hide()
             return

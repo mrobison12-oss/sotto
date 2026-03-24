@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QLineEdit,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from sotto.config import SottoConfig
 from sotto.hotkey import parse_hotkey
+from sotto.startup import set_startup_enabled
 from sotto.transcribe import BACKENDS
 
 
@@ -46,10 +48,36 @@ class SettingsDialog(QDialog):
         self._paste_delay.setValue(config.auto_paste_delay_ms)
         d_layout.addRow("Paste delay:", self._paste_delay)
 
+        self._confirmation_mode = QCheckBox("Show preview before pasting")
+        self._confirmation_mode.setChecked(config.confirmation_mode)
+        self._confirmation_mode.setToolTip("Review and optionally edit transcription before it's pasted")
+        d_layout.addRow(self._confirmation_mode)
+
+        self._language = QLineEdit(config.language)
+        self._language.setPlaceholderText("auto-detect (or e.g. en, es, fr, de)")
+        self._language.setToolTip("ISO 639-1 language code. Leave empty for auto-detection.")
+        d_layout.addRow("Language:", self._language)
+
         self._initial_prompt = QLineEdit(config.initial_prompt)
         self._initial_prompt.setPlaceholderText("e.g. Sotto, Claude, Obsidian")
         self._initial_prompt.setToolTip("Comma-separated words to help Whisper recognize proper nouns")
         d_layout.addRow("Vocabulary hints:", self._initial_prompt)
+
+        self._vad_silence = QDoubleSpinBox()
+        self._vad_silence.setRange(0.5, 10.0)
+        self._vad_silence.setSingleStep(0.5)
+        self._vad_silence.setSuffix(" s")
+        self._vad_silence.setValue(config.vad_silence_seconds)
+        self._vad_silence.setToolTip("Seconds of silence before auto-stop (restart required)")
+        d_layout.addRow("Silence threshold:", self._vad_silence)
+
+        self._max_record = QDoubleSpinBox()
+        self._max_record.setRange(10.0, 600.0)
+        self._max_record.setSingleStep(10.0)
+        self._max_record.setSuffix(" s")
+        self._max_record.setValue(config.max_record_seconds)
+        self._max_record.setToolTip("Maximum recording duration safety cap (restart required)")
+        d_layout.addRow("Max recording:", self._max_record)
 
         self._backend_combo = QComboBox()
         for name in sorted(BACKENDS.keys()):
@@ -106,6 +134,17 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(history)
 
+        # -- System group --
+        system = QGroupBox("System")
+        s_layout = QFormLayout(system)
+
+        self._start_with_windows = QCheckBox("Start Sotto with Windows")
+        self._start_with_windows.setChecked(config.start_with_windows)
+        self._start_with_windows.setToolTip("Launch Sotto automatically when you log in")
+        s_layout.addRow(self._start_with_windows)
+
+        layout.addWidget(system)
+
         # -- Buttons --
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -132,6 +171,7 @@ class SettingsDialog(QDialog):
         new_config = SottoConfig(
             auto_paste=self._auto_paste.isChecked(),
             auto_paste_delay_ms=self._paste_delay.value(),
+            confirmation_mode=self._confirmation_mode.isChecked(),
             audio_cues=self._audio_cues.isChecked(),
             show_notifications=self._notifications.isChecked(),
             history_size=self._history_size.value(),
@@ -139,9 +179,25 @@ class SettingsDialog(QDialog):
             log_retention_days=self._retention_days.value(),
             initial_prompt=self._initial_prompt.text().strip(),
             show_indicator=self._indicator.isChecked(),
+            model=self._config.model,  # preserve model from current config
             backend=self._backend_combo.currentText(),
             hotkey=hotkey_str or self._config.hotkey,
+            language=self._language.text().strip(),
+            vad_silence_seconds=self._vad_silence.value(),
+            max_record_seconds=self._max_record.value(),
+            start_with_windows=self._start_with_windows.isChecked(),
         )
+
+        # Apply startup change immediately via registry
+        if new_config.start_with_windows != self._config.start_with_windows:
+            if not set_startup_enabled(new_config.start_with_windows):
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self, "Startup Error",
+                    "Failed to update Windows startup setting.\n"
+                    "Check the logs for details.",
+                )
+
         new_config.save()
         self.config_changed.emit(new_config)
         self.accept()

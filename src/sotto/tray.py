@@ -19,6 +19,7 @@ COLORS = {
     "idle": QColor(100, 100, 100),        # Gray — dormant
     "listening": QColor(220, 50, 50),     # Red — recording
     "processing": QColor(50, 150, 220),   # Blue — thinking
+    "confirming": QColor(100, 100, 100),  # Gray — preview open, functionally idle
 }
 
 def _make_tooltips(hotkey_display: str = "Ctrl+Space") -> dict[str, str]:
@@ -27,6 +28,7 @@ def _make_tooltips(hotkey_display: str = "Ctrl+Space") -> dict[str, str]:
         "idle": f"Sotto — Ready ({hotkey_display})",
         "listening": "Sotto — Listening...",
         "processing": "Sotto — Transcribing...",
+        "confirming": f"Sotto — Review transcription ({hotkey_display})",
     }
 
 TOOLTIPS = _make_tooltips()

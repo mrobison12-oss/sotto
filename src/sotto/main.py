@@ -20,6 +20,7 @@ from sotto.history import TranscriptionHistory, prune_log
 from sotto.paste import simulate_paste
 from sotto.transcribe import TranscriptionResult, create_backend
 from sotto.indicator import RecordingIndicator
+from sotto.preview import PreviewWindow
 from sotto.hotkey import parse_hotkey, format_hotkey
 from sotto.tray import SystemTray
 from sotto import hardware, sounds
@@ -36,6 +37,7 @@ class AppState(enum.Enum):
     IDLE = "idle"
     LISTENING = "listening"
     PROCESSING = "processing"
+    CONFIRMING = "confirming"  # Preview window open, waiting for user
 
 
 class TranscriptionSignals(QObject):
@@ -54,17 +56,20 @@ class TranscriptionTask(QRunnable):
     """
 
     def __init__(self, backend, audio: np.ndarray, signals: TranscriptionSignals,
-                 initial_prompt: str | None = None):
+                 initial_prompt: str | None = None, language: str | None = None):
         super().__init__()
         self.backend = backend
         self.audio = audio
         self.signals = signals
         self.initial_prompt = initial_prompt
+        self.language = language
         self.setAutoDelete(True)
 
     def run(self) -> None:
         try:
-            result = self.backend.transcribe(self.audio, initial_prompt=self.initial_prompt)
+            result = self.backend.transcribe(
+                self.audio, initial_prompt=self.initial_prompt, language=self.language,
+            )
             self.signals.finished.emit(result)
         except Exception as e:
             self.signals.error.emit(str(e))
@@ -131,10 +136,17 @@ class SottoApp(QMainWindow):
             prune_log(self._config.log_retention_days)
 
         self._backend = create_backend(self._config.backend, model_size=self._config.model or None)
-        self._audio = AudioCapture(parent=self)
+        self._audio = AudioCapture(
+            vad_silence_seconds=self._config.vad_silence_seconds,
+            max_record_seconds=self._config.max_record_seconds,
+            parent=self,
+        )
         self._history = TranscriptionHistory(max_size=self._config.history_size)
         self._tray = SystemTray(history=self._history, hotkey_display=self._hotkey_display, parent=self)
         self._indicator = RecordingIndicator()
+        self._preview = PreviewWindow()
+        self._preview.accepted.connect(self._on_preview_accepted)
+        self._preview.dismissed.connect(self._on_preview_dismissed)
 
         # Private thread pool for transcription — avoids polluting Qt's global pool
         self._pool = QThreadPool()
@@ -170,10 +182,20 @@ class SottoApp(QMainWindow):
 
         self._tray.show()
         self._update_state(AppState.LOADING)
+        self._tray.show_toast("Sotto — Loading", "Loading transcription model, this may take a moment...")
 
         # Load models in background so the GUI stays responsive
         import threading
+        self._model_load_event = threading.Event()
         threading.Thread(target=self._load_models, daemon=True).start()
+
+        # Watchdog: if model loading hasn't completed in 180s, show error
+        from PySide6.QtCore import QTimer
+        self._load_watchdog = QTimer(self)
+        self._load_watchdog.setSingleShot(True)
+        self._load_watchdog.setInterval(180_000)  # 3 minutes
+        self._load_watchdog.timeout.connect(self._on_model_load_timeout)
+        self._load_watchdog.start()
 
     def nativeEvent(self, event_type: QByteArray | bytes, message: int) -> object:
         """Handle WM_HOTKEY from RegisterHotKey."""
@@ -191,13 +213,16 @@ class SottoApp(QMainWindow):
             self._backend.load_model()
             self._audio.load_vad()
             logger.info("Model loaded, ready for dictation")
+            self._model_load_event.set()
             self._models_loaded.emit()
         except Exception as e:
             logger.error("Model loading failed: %s", e)
+            self._model_load_event.set()
             self._model_load_failed.emit(str(e))
 
     @Slot()
     def _on_models_loaded(self) -> None:
+        self._load_watchdog.stop()
         self._update_state(AppState.IDLE)
         if self._first_launch_message:
             self._tray.show_toast(
@@ -207,8 +232,25 @@ class SottoApp(QMainWindow):
             )
             self._first_launch_message = None
 
+    @Slot()
+    def _on_model_load_timeout(self) -> None:
+        """Watchdog fires if model loading exceeds timeout."""
+        if self._model_load_event.is_set():
+            return  # already loaded, watchdog is stale
+        logger.error("Model loading timed out after 180s")
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.critical(
+            None, "Sotto — Loading Timeout",
+            "Model loading took too long (>3 minutes).\n\n"
+            "This usually means the model is still downloading.\n"
+            "Check your internet connection and restart Sotto.\n\n"
+            "Model files are cached after the first download.",
+        )
+        sys.exit(1)
+
     @Slot(str)
     def _on_model_load_failed(self, error: str) -> None:
+        self._load_watchdog.stop()
         from PySide6.QtWidgets import QMessageBox
         QMessageBox.critical(
             None, "Sotto — Model Error",
@@ -227,7 +269,7 @@ class SottoApp(QMainWindow):
             self._audio.stop()
             if self._config.audio_cues:
                 sounds.play("stop")
-        # If PROCESSING, ignore hotkey
+        # If PROCESSING or CONFIRMING, ignore hotkey
 
     @Slot(np.ndarray)
     def _on_audio_ready(self, audio: np.ndarray) -> None:
@@ -252,16 +294,14 @@ class SottoApp(QMainWindow):
         self._current_signals = signals  # must be set before start() to prevent GC race
 
         prompt = self._config.initial_prompt if self._config.initial_prompt else None
-        task = TranscriptionTask(self._backend, audio, signals, initial_prompt=prompt)
+        language = self._config.language if self._config.language else None
+        task = TranscriptionTask(self._backend, audio, signals, initial_prompt=prompt, language=language)
         self._pool.start(task)  # task may complete instantly — signals ref must already be held
 
     @Slot(TranscriptionResult)
     def _on_transcription_done(self, result: TranscriptionResult) -> None:
         """Write transcription to clipboard, auto-paste, notify."""
         if result.text:
-            clipboard = QApplication.clipboard()
-            clipboard.setText(result.text)
-
             # History + file log
             self._history.add(
                 text=result.text,
@@ -275,24 +315,50 @@ class SottoApp(QMainWindow):
             if self._config.audio_cues:
                 sounds.play("done")
 
-            # Desktop notification
-            if self._config.show_notifications:
-                preview = result.text[:120] + ("..." if len(result.text) > 120 else "")
-                self._tray.show_toast("Sotto", preview)
-
-            # Auto-paste after delay (must run on main thread for SendInput)
-            if self._config.auto_paste:
-                _paste_after_delay(self._config.auto_paste_delay_ms)
-
             logger.info(
                 "Transcribed %.1fs audio in %.2fs: %s",
                 result.duration_seconds,
                 result.processing_seconds,
                 result.text[:80],
             )
+
+            if self._config.confirmation_mode:
+                # Show preview window — user decides whether to paste
+                logger.info("Confirmation mode ON — showing preview window")
+                self._current_signals = None
+                self._update_state(AppState.CONFIRMING)
+                self._preview.show_preview(result.text)
+                return
+            else:
+                self._finalize_paste(result.text)
         else:
             logger.info("No speech detected")
         self._current_signals = None
+        self._update_state(AppState.IDLE)
+
+    def _finalize_paste(self, text: str) -> None:
+        """Copy text to clipboard, optionally auto-paste, and notify."""
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
+
+        if self._config.show_notifications:
+            preview = text[:120] + ("..." if len(text) > 120 else "")
+            self._tray.show_toast("Sotto", preview)
+
+        if self._config.auto_paste:
+            _paste_after_delay(self._config.auto_paste_delay_ms)
+
+    @Slot(str)
+    def _on_preview_accepted(self, text: str) -> None:
+        """User accepted (possibly edited) text from preview window."""
+        logger.info("Preview accepted: %s", text[:80])
+        self._finalize_paste(text)
+        self._update_state(AppState.IDLE)
+
+    @Slot()
+    def _on_preview_dismissed(self) -> None:
+        """User dismissed the preview — discard transcription."""
+        logger.info("Preview dismissed")
         self._update_state(AppState.IDLE)
 
     @Slot(str)

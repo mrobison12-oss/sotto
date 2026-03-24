@@ -17,6 +17,7 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 class SottoConfig:
     auto_paste: bool = True
     auto_paste_delay_ms: int = 100
+    confirmation_mode: bool = False
     audio_cues: bool = True
     show_notifications: bool = True
     history_size: int = 10
@@ -27,6 +28,10 @@ class SottoConfig:
     model: str = ""  # empty = auto-select on first launch
     backend: str = "faster-whisper"
     hotkey: str = "ctrl+space"
+    language: str = ""  # empty = auto-detect
+    vad_silence_seconds: float = 2.0
+    max_record_seconds: float = 120.0
+    start_with_windows: bool = False
 
     def save(self) -> None:
         """Persist current config to disk."""
@@ -50,11 +55,19 @@ class SottoConfig:
                 if f.name not in data:
                     continue
                 val = data[f.name]
-                if isinstance(val, type(getattr(defaults, f.name))):
+                expected_type = type(getattr(defaults, f.name))
+                # bool is a subclass of int in Python — reject bool for int/float fields
+                if isinstance(val, bool) and expected_type is not bool:
+                    logger.warning("Config field %r: expected %s, got bool — using default",
+                                   f.name, expected_type.__name__)
+                elif isinstance(val, expected_type):
                     filtered[f.name] = val
+                # JSON has no int/float distinction — accept int for float fields
+                elif expected_type is float and isinstance(val, int):
+                    filtered[f.name] = float(val)
                 else:
                     logger.warning("Config field %r: expected %s, got %s — using default",
-                                   f.name, f.type, type(val).__name__)
+                                   f.name, expected_type.__name__, type(val).__name__)
             return cls(**filtered)
         except Exception as e:
             logger.warning("Failed to load config, using defaults: %s", e)
