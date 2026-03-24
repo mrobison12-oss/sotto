@@ -61,10 +61,9 @@ class AudioCapture(QObject):
         self._lock = threading.Lock()
 
         # Env vars override config (useful for testing/scripting)
-        silence_sec = float(os.environ.get("SOTTO_VAD_SILENCE", str(vad_silence_seconds)))
-        self._silence_threshold = int(silence_sec * SAMPLE_RATE / CHUNK_SAMPLES)
-        max_sec = float(os.environ.get("SOTTO_MAX_RECORD", str(max_record_seconds)))
-        self._max_chunks = int(max_sec * SAMPLE_RATE / CHUNK_SAMPLES)
+        self._env_silence = os.environ.get("SOTTO_VAD_SILENCE")
+        self._env_max_record = os.environ.get("SOTTO_MAX_RECORD")
+        self.update_thresholds(vad_silence_seconds, max_record_seconds)
 
         self._recording = False
         self._chunk_count = 0
@@ -84,6 +83,13 @@ class AudioCapture(QObject):
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(50)
         self._poll_timer.timeout.connect(self._poll_flags)
+
+    def update_thresholds(self, vad_silence_seconds: float, max_record_seconds: float) -> None:
+        """Update VAD thresholds. Safe to call while idle — takes effect on next recording."""
+        silence_sec = float(self._env_silence) if self._env_silence else vad_silence_seconds
+        max_sec = float(self._env_max_record) if self._env_max_record else max_record_seconds
+        self._silence_threshold = int(silence_sec * SAMPLE_RATE / CHUNK_SAMPLES)
+        self._max_chunks = int(max_sec * SAMPLE_RATE / CHUNK_SAMPLES)
 
     def load_vad(self) -> None:
         """Pre-load VAD model. Call once at startup."""
@@ -193,8 +199,11 @@ class AudioCapture(QObject):
         with self._lock:
             self._chunks.append(chunk)
 
-        # RMS level for UI
+        # RMS level for UI — noise gate so ambient sounds don't flicker the waveform.
+        # Threshold ~0.008 filters out typical room noise (pets, HVAC, keyboard)
+        # while letting any intentional speech through clearly.
         rms = float(np.sqrt(np.mean(chunk ** 2)))
+        display_rms = rms if rms > 0.004 else 0.0
 
         with self._flag_lock:
             self._chunk_count += 1
@@ -203,7 +212,7 @@ class AudioCapture(QObject):
                                self._max_chunks * CHUNK_SAMPLES / SAMPLE_RATE)
                 self._pending_stop = True
                 return
-            self._pending_level = min(rms * 25.0, 1.0)
+            self._pending_level = min(display_rms * 25.0, 1.0)
 
         # Enqueue chunk for VAD worker (non-blocking — drop if queue is full)
         try:

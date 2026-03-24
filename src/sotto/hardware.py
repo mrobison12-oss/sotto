@@ -14,17 +14,49 @@ class HardwareProfile:
 
 
 def detect_hardware() -> HardwareProfile:
-    """Query CUDA availability and VRAM. Safe to call if CUDA is absent."""
+    """Query CUDA availability and VRAM via CTranslate2 (the actual inference engine).
+
+    Does NOT use torch.cuda — silero-vad pulls in CPU-only PyTorch, which
+    always reports CUDA as unavailable even when the GPU works fine via CTranslate2.
+    Falls back to torch only for VRAM/device name (not available via CTranslate2 API).
+    """
     try:
-        import torch
-        if torch.cuda.is_available():
-            idx = torch.cuda.current_device()
-            props = torch.cuda.get_device_properties(idx)
-            vram_gb = props.total_memory / (1024 ** 3)
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            # CTranslate2 confirms CUDA works — get VRAM and device name
+            vram_gb = 0.0
+            device_name = "CUDA GPU"
+
+            # Try torch first (gives clean API for device properties)
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    idx = torch.cuda.current_device()
+                    props = torch.cuda.get_device_properties(idx)
+                    vram_gb = props.total_memory / (1024 ** 3)
+                    device_name = props.name
+            except Exception:
+                pass
+
+            # If torch couldn't get VRAM (CPU-only build), fall back to nvidia-smi
+            if vram_gb == 0.0:
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        ["nvidia-smi", "--query-gpu=memory.total,name", "--format=csv,noheader,nounits"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if result.returncode == 0:
+                        parts = result.stdout.strip().split(", ")
+                        vram_gb = float(parts[0]) / 1024  # MiB to GiB
+                        device_name = parts[1] if len(parts) > 1 else "CUDA GPU"
+                except Exception as e:
+                    logger.debug("nvidia-smi fallback failed: %s", e)
+
             return HardwareProfile(
                 cuda_available=True,
                 vram_gb=round(vram_gb, 1),
-                device_name=props.name,
+                device_name=device_name,
             )
     except Exception as e:
         logger.debug("CUDA detection failed: %s", e)

@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
 from sotto.config import SottoConfig
 from sotto.hotkey import parse_hotkey
 from sotto.startup import set_startup_enabled
-from sotto.transcribe import BACKENDS
 
 
 class SettingsDialog(QDialog):
@@ -68,7 +67,7 @@ class SettingsDialog(QDialog):
         self._vad_silence.setSingleStep(0.5)
         self._vad_silence.setSuffix(" s")
         self._vad_silence.setValue(config.vad_silence_seconds)
-        self._vad_silence.setToolTip("Seconds of silence before auto-stop (restart required)")
+        self._vad_silence.setToolTip("Seconds of silence before auto-stop")
         d_layout.addRow("Silence threshold:", self._vad_silence)
 
         self._max_record = QDoubleSpinBox()
@@ -76,15 +75,27 @@ class SettingsDialog(QDialog):
         self._max_record.setSingleStep(10.0)
         self._max_record.setSuffix(" s")
         self._max_record.setValue(config.max_record_seconds)
-        self._max_record.setToolTip("Maximum recording duration safety cap (restart required)")
+        self._max_record.setToolTip("Maximum recording duration safety cap")
         d_layout.addRow("Max recording:", self._max_record)
 
-        self._backend_combo = QComboBox()
-        for name in sorted(BACKENDS.keys()):
-            self._backend_combo.addItem(name)
-        self._backend_combo.setCurrentText(config.backend)
-        self._backend_combo.setToolTip("Transcription engine (restart required to take effect)")
-        d_layout.addRow("Backend:", self._backend_combo)
+        self._model_combo = QComboBox()
+        _MODELS = [
+            ("large-v3-turbo", "large-v3-turbo (best, needs 6+ GB VRAM)"),
+            ("distil-large-v3", "distil-large-v3 (fast, needs 3+ GB VRAM)"),
+            ("base", "base (CPU-friendly, lower accuracy)"),
+        ]
+        for value, label in _MODELS:
+            self._model_combo.addItem(label, value)
+        # Select current model
+        idx = self._model_combo.findData(config.model)
+        if idx >= 0:
+            self._model_combo.setCurrentIndex(idx)
+        else:
+            # Custom model name — add it as-is
+            self._model_combo.addItem(config.model, config.model)
+            self._model_combo.setCurrentIndex(self._model_combo.count() - 1)
+        self._model_combo.setToolTip("Whisper model size (restart required)")
+        d_layout.addRow("Model:", self._model_combo)
 
         self._hotkey = QLineEdit(config.hotkey)
         self._hotkey.setPlaceholderText("e.g. ctrl+space, alt+shift+r")
@@ -179,8 +190,8 @@ class SettingsDialog(QDialog):
             log_retention_days=self._retention_days.value(),
             initial_prompt=self._initial_prompt.text().strip(),
             show_indicator=self._indicator.isChecked(),
-            model=self._config.model,  # preserve model from current config
-            backend=self._backend_combo.currentText(),
+            model=self._model_combo.currentData(),
+            backend=self._config.backend,
             hotkey=hotkey_str or self._config.hotkey,
             language=self._language.text().strip(),
             vad_silence_seconds=self._vad_silence.value(),

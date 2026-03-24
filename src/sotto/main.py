@@ -284,6 +284,14 @@ class SottoApp(QMainWindow):
             self._update_state(AppState.IDLE)
             return
 
+        # Check if audio is mostly silence — skip transcription to avoid
+        # Whisper hallucinating the initial_prompt as output
+        rms = float(np.sqrt(np.mean(audio ** 2)))
+        if rms < 0.005:
+            logger.info("Audio too quiet (RMS=%.4f), skipping transcription", rms)
+            self._update_state(AppState.IDLE)
+            return
+
         self._update_state(AppState.PROCESSING)
 
         # Create signals as a standalone object (not owned by the task).
@@ -299,8 +307,24 @@ class SottoApp(QMainWindow):
         self._pool.start(task)  # task may complete instantly — signals ref must already be held
 
     @Slot(TranscriptionResult)
+    def _is_hallucination(self, text: str) -> bool:
+        """Detect if Whisper hallucinated the initial prompt instead of real speech."""
+        if not self._config.initial_prompt:
+            return False
+        # Check if output is just the prompt words (possibly reordered/partial)
+        prompt_words = {w.strip().lower() for w in self._config.initial_prompt.split(",")}
+        text_words = {w.strip(".,!? ").lower() for w in text.split()}
+        return len(text_words) > 0 and text_words.issubset(prompt_words)
+
+    @Slot(TranscriptionResult)
     def _on_transcription_done(self, result: TranscriptionResult) -> None:
         """Write transcription to clipboard, auto-paste, notify."""
+        if result.text and self._is_hallucination(result.text):
+            logger.info("Discarded likely hallucination: %s", result.text)
+            self._current_signals = None
+            self._update_state(AppState.IDLE)
+            return
+
         if result.text:
             # History + file log
             self._history.add(
@@ -408,6 +432,7 @@ class SottoApp(QMainWindow):
         """Apply updated settings."""
         self._config = config
         self._history.resize(config.history_size)
+        self._audio.update_thresholds(config.vad_silence_seconds, config.max_record_seconds)
         if not config.show_indicator:
             self._indicator.hide()
         logger.info("Settings updated")
