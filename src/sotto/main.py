@@ -21,6 +21,7 @@ from sotto.paste import simulate_paste
 from sotto.transcribe import TranscriptionResult, create_backend
 from sotto.indicator import RecordingIndicator
 from sotto.preview import PreviewWindow
+from sotto.splash import SplashScreen
 from sotto.hotkey import parse_hotkey, format_hotkey
 from sotto.tray import SystemTray
 from sotto import hardware, sounds
@@ -200,8 +201,9 @@ class SottoApp(QMainWindow):
                 logger.info("Quick note hotkey registered: %s", qn_display)
 
         self._tray.show()
+        self._splash = SplashScreen()
+        self._splash.show_centered()
         self._update_state(AppState.LOADING)
-        self._tray.show_toast("Sotto — Loading", "Loading transcription model, this may take a moment...")
 
         # Load models in background so the GUI stays responsive
         import threading
@@ -246,6 +248,7 @@ class SottoApp(QMainWindow):
     @Slot()
     def _on_models_loaded(self) -> None:
         self._load_watchdog.stop()
+        self._splash.close()
         self._update_state(AppState.IDLE)
         if self._first_launch_message:
             self._tray.show_toast(
@@ -261,6 +264,7 @@ class SottoApp(QMainWindow):
         if self._model_load_event.is_set():
             return  # already loaded, watchdog is stale
         logger.error("Model loading timed out after 180s")
+        self._splash.close()
         from PySide6.QtWidgets import QMessageBox
         QMessageBox.critical(
             None, "Sotto — Loading Timeout",
@@ -274,6 +278,7 @@ class SottoApp(QMainWindow):
     @Slot(str)
     def _on_model_load_failed(self, error: str) -> None:
         self._load_watchdog.stop()
+        self._splash.close()
         from PySide6.QtWidgets import QMessageBox
         QMessageBox.critical(
             None, "Sotto — Model Error",
