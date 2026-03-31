@@ -1,7 +1,9 @@
 """Transcription history ring buffer and fallback file log."""
 
 import logging
+import os
 import re
+import tempfile
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -70,6 +72,8 @@ class TranscriptionHistory:
                 # Rotate if over size limit
                 if LOG_FILE.exists() and LOG_FILE.stat().st_size > LOG_MAX_BYTES:
                     backup = LOG_FILE.with_suffix(".log.1")
+                    if backup.exists():
+                        logger.debug("Overwriting existing log backup %s", backup)
                     LOG_FILE.replace(backup)
                 with open(LOG_FILE, "a", encoding="utf-8") as f:
                     ts = entry.timestamp.strftime("%Y-%m-%d %H:%M:%S")
@@ -128,7 +132,22 @@ def prune_log(retention_days: int) -> None:
 
     if pruned_count > 0:
         try:
-            LOG_FILE.write_text("".join(kept), encoding="utf-8")
+            # Atomic write: write to temp file then replace, so a crash
+            # mid-write doesn't destroy the live log.
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(LOG_FILE.parent), suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as tmp_f:
+                    tmp_f.write("".join(kept))
+                os.replace(tmp_path, str(LOG_FILE))
+            except BaseException:
+                # Clean up temp file on failure
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
             logger.info("Pruned %d log entries older than %d days", pruned_count, retention_days)
         except Exception as e:
             logger.warning("Failed to write pruned log: %s", e)

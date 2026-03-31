@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import time
 
 import numpy as np
 import sounddevice as sd
@@ -58,7 +59,9 @@ def play(cue_name: str) -> None:
             return  # another cue is playing — skip
         try:
             sd.play(audio, samplerate=SAMPLE_RATE)
-            sd.wait()
+            # Bounded wait instead of sd.wait() which can hang indefinitely
+            time.sleep(len(audio) / SAMPLE_RATE + 0.1)
+            sd.stop()
         except Exception as e:
             logger.debug("Audio cue playback failed: %s", e)
         finally:

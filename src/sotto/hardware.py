@@ -1,6 +1,7 @@
 """Hardware capability detection and model auto-selection."""
 
 import logging
+import sys
 from dataclasses import dataclass
 
 logger = logging.getLogger("sotto")
@@ -20,6 +21,9 @@ def detect_hardware() -> HardwareProfile:
     always reports CUDA as unavailable even when the GPU works fine via CTranslate2.
     Falls back to torch only for VRAM/device name (not available via CTranslate2 API).
     """
+    if sys.platform == "darwin":
+        return HardwareProfile(cuda_available=False, vram_gb=0.0, device_name="CPU")
+
     try:
         import ctranslate2
         if ctranslate2.get_cuda_device_count() > 0:
@@ -47,9 +51,10 @@ def detect_hardware() -> HardwareProfile:
                         capture_output=True, text=True, timeout=5,
                     )
                     if result.returncode == 0:
-                        parts = result.stdout.strip().split(", ")
-                        vram_gb = float(parts[0]) / 1024  # MiB to GiB
-                        device_name = parts[1] if len(parts) > 1 else "CUDA GPU"
+                        first_line = result.stdout.strip().splitlines()[0]
+                        parts = first_line.split(",")
+                        vram_gb = float(parts[0].strip()) / 1024  # MiB to GiB
+                        device_name = parts[1].strip() if len(parts) > 1 else "CUDA GPU"
                 except Exception as e:
                     logger.debug("nvidia-smi fallback failed: %s", e)
 

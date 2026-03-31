@@ -211,6 +211,20 @@ class SettingsDialog(QDialog):
                 )
                 return
 
+        # Validate quick note hotkey before saving
+        qn_hotkey_str = self._qn_hotkey.text().strip()
+        if qn_hotkey_str:
+            try:
+                parse_hotkey(qn_hotkey_str)
+            except ValueError as e:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self, "Invalid Quick Note Hotkey",
+                    f"Could not parse quick note hotkey '{qn_hotkey_str}':\n{e}\n\n"
+                    f"Examples: ctrl+shift+space, alt+shift+r, ctrl+f10",
+                )
+                return
+
         new_config = SottoConfig(
             auto_paste=self._auto_paste.isChecked(),
             auto_paste_delay_ms=self._paste_delay.value(),
@@ -243,6 +257,14 @@ class SettingsDialog(QDialog):
                     self, "Startup Error",
                     "Failed to update Windows startup setting.\n"
                     "Check the logs for details.",
+                )
+                # Revert to previous value so config doesn't store a lie
+                from dataclasses import asdict
+                new_config = SottoConfig(
+                    **{
+                        **asdict(new_config),
+                        "start_with_windows": self._config.start_with_windows,
+                    }
                 )
 
         new_config.save()

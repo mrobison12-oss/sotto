@@ -39,6 +39,7 @@ if sys.platform == "win32":
         class _INPUT(ctypes.Union):
             _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT)]
 
+        _anonymous_ = ("_input",)
         _fields_ = [
             ("type", ctypes.wintypes.DWORD),
             ("_input", _INPUT),
@@ -46,7 +47,7 @@ if sys.platform == "win32":
 
     def _make_key_input(vk: int, flags: int = 0) -> INPUT:
         inp = INPUT(type=INPUT_KEYBOARD)
-        inp._input.ki = KEYBDINPUT(wVk=vk, wScan=0, dwFlags=flags, time=0, dwExtraInfo=0)
+        inp.ki = KEYBDINPUT(wVk=vk, wScan=0, dwFlags=flags, time=0, dwExtraInfo=0)
         return inp
 
     def simulate_paste() -> None:

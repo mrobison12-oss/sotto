@@ -8,15 +8,18 @@ version = "0.1.0"
 description = "Local speech-to-text dictation tool — sotto voce"
 requires-python = ">=3.10"
 dependencies = [
-    "PySide6",
-    "sounddevice",
-    "numpy",
-    "faster-whisper>=1.0",
-    "silero-vad",
+    "PySide6>=6.6,<7",
+    "sounddevice>=0.4,<1",
+    "numpy>=1.24,<3",
+    "faster-whisper>=1.0,<2",
+    "silero-vad>=5,<7",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-qt"]
+dev = ["pytest>=7,<9", "pytest-qt>=4.3,<5"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [project.scripts]
 sotto = "sotto.main:main"

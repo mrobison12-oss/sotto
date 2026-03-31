@@ -46,6 +46,7 @@ class TranscriptionBackend(abc.ABC):
         audio: np.ndarray,
         sample_rate: int = 16000,
         initial_prompt: str | None = None,
+        language: str | None = None,
     ) -> TranscriptionResult:
         """Transcribe a float32 mono audio array to text."""
 

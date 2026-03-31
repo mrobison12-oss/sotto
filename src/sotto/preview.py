@@ -177,6 +177,6 @@ class PreviewWindow(QWidget):
 
         # Center horizontally on cursor, above it vertically
         x = max(geo.x(), min(cursor_pos.x() - w // 2, geo.x() + geo.width() - w))
-        y = max(geo.y(), cursor_pos.y() - h - 20)
+        y = max(geo.y(), min(cursor_pos.y() - h - 20, geo.y() + geo.height() - h))
 
         self.move(x, y)

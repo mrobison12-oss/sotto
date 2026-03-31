@@ -69,7 +69,7 @@ class AudioCapture(QObject):
         self._chunk_count = 0
 
         # Queue for passing chunks from audio callback to VAD worker
-        self._vad_queue: queue.Queue[np.ndarray | None] = queue.Queue()
+        self._vad_queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=64)
         self._vad_thread: threading.Thread | None = None
 
         # Thread-safe flags set by the VAD worker, polled by QTimer
@@ -88,8 +88,9 @@ class AudioCapture(QObject):
         """Update VAD thresholds. Safe to call while idle — takes effect on next recording."""
         silence_sec = float(self._env_silence) if self._env_silence else vad_silence_seconds
         max_sec = float(self._env_max_record) if self._env_max_record else max_record_seconds
-        self._silence_threshold = int(silence_sec * SAMPLE_RATE / CHUNK_SAMPLES)
-        self._max_chunks = int(max_sec * SAMPLE_RATE / CHUNK_SAMPLES)
+        with self._flag_lock:
+            self._silence_threshold = int(silence_sec * SAMPLE_RATE / CHUNK_SAMPLES)
+            self._max_chunks = int(max_sec * SAMPLE_RATE / CHUNK_SAMPLES)
 
     def load_vad(self) -> None:
         """Pre-load VAD model. Call once at startup."""
@@ -165,7 +166,8 @@ class AudioCapture(QObject):
             self._vad_thread.join(timeout=2.0)
             self._vad_thread = None
 
-        duration = len(self._chunks) * CHUNK_SAMPLES / SAMPLE_RATE
+        with self._lock:
+            duration = len(self._chunks) * CHUNK_SAMPLES / SAMPLE_RATE
         logger.info("Recording stopped, %.1fs captured", duration)
         self._emit_audio()
 
@@ -222,6 +224,9 @@ class AudioCapture(QObject):
 
     def _vad_worker(self) -> None:
         """Dedicated thread for VAD inference. Pulls chunks from queue."""
+        if self._vad_model is not None:
+            self._vad_model.reset_states()
+
         speech_detected = False
         silence_chunks = 0
 
@@ -247,6 +252,7 @@ class AudioCapture(QObject):
                 logger.error("VAD inference failed: %s", e)
                 continue
 
+            should_log_stop = False
             with self._flag_lock:
                 if not self._recording:
                     return
@@ -256,9 +262,11 @@ class AudioCapture(QObject):
                 elif speech_detected:
                     silence_chunks += 1
                     if silence_chunks >= self._silence_threshold:
-                        logger.info("VAD silence threshold reached, auto-stopping")
+                        should_log_stop = True
                         self._pending_stop = True
-                        return
+            if should_log_stop:
+                logger.info("VAD silence threshold reached, auto-stopping")
+                return
 
     def _emit_audio(self) -> None:
         """Concatenate buffered chunks and emit signal."""

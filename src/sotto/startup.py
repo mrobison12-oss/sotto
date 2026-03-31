@@ -18,8 +18,13 @@ def _get_sotto_command() -> str:
     falls back to 'pythonw -m sotto' using the current interpreter.
     Uses pythonw to avoid a console window flash on startup.
     """
+    # Prefer the exe next to the current interpreter (same venv / install)
+    from pathlib import Path
+    candidate = Path(sys.executable).parent / "sotto.exe"
+    if candidate.exists():
+        return f'"{candidate}"'
+    # Fall back to PATH lookup
     sotto_exe = shutil.which("sotto")
-    # Only use the found binary if it's a .exe (not a script wrapper)
     if sotto_exe and sotto_exe.lower().endswith(".exe"):
         return f'"{sotto_exe}"'
     # Use pythonw if available (no console window), fall back to python

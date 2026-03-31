@@ -41,7 +41,9 @@ class SottoConfig:
     def save(self) -> None:
         """Persist current config to disk."""
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        CONFIG_FILE.write_text(json.dumps(asdict(self), indent=2))
+        tmp = CONFIG_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        os.replace(tmp, CONFIG_FILE)
         logger.debug("Config saved to %s", CONFIG_FILE)
 
     @classmethod
@@ -52,7 +54,7 @@ class SottoConfig:
             cfg.save()
             return cfg
         try:
-            data = json.loads(CONFIG_FILE.read_text())
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
             # Validate keys and types — ignore stale or mistyped values
             defaults = cls()
             filtered = {}

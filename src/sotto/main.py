@@ -7,8 +7,9 @@ import logging
 import os
 import sys
 
-from sotto.cuda_utils import ensure_cuda_dlls
-ensure_cuda_dlls()
+if sys.platform == "win32":
+    from sotto.cuda_utils import ensure_cuda_dlls
+    ensure_cuda_dlls()
 
 import numpy as np
 from PySide6.QtCore import QRunnable, QThreadPool, Signal, Slot, QObject, QByteArray, Qt
@@ -318,9 +319,11 @@ class SottoApp(QMainWindow):
     @Slot(np.ndarray)
     def _on_audio_ready(self, audio: np.ndarray) -> None:
         """Called when audio capture finishes (VAD or manual stop)."""
-        # Guard against audio arriving while already processing
-        if self._state == AppState.PROCESSING:
-            logger.debug("Audio received while processing, ignoring")
+        if self._shutting_down:
+            return
+        # Guard against audio arriving in non-recording states
+        if self._state != AppState.LISTENING:
+            logger.debug("Audio received in %s state, ignoring", self._state.value)
             return
 
         if len(audio) < 1600:  # Less than 0.1s — likely accidental
@@ -354,7 +357,7 @@ class SottoApp(QMainWindow):
         """Detect Whisper hallucinations: prompt echo or repetition loops."""
         # Check 1: output is just the prompt words (possibly reordered/partial)
         if self._config.initial_prompt:
-            prompt_words = {w.strip().lower() for w in self._config.initial_prompt.split(",")}
+            prompt_words = {w.strip(".,!? ").lower() for w in self._config.initial_prompt.split()}
             text_words = {w.strip(".,!? ").lower() for w in text.split()}
             if len(text_words) > 0 and text_words.issubset(prompt_words):
                 return True
@@ -376,6 +379,26 @@ class SottoApp(QMainWindow):
         """Write transcription to clipboard, auto-paste, notify."""
         if result.text and self._is_hallucination(result.text):
             logger.info("Discarded likely hallucination: %s", result.text)
+            if self._quick_note_active:
+                self._quick_note_active = False
+                self._audio.update_thresholds(
+                    self._config.vad_silence_seconds,
+                    self._config.max_record_seconds,
+                )
+            self._current_signals = None
+            self._update_state(AppState.IDLE)
+            return
+
+        if not result.text or not result.text.strip():
+            logger.info("No speech detected")
+            if self._config.audio_cues:
+                sounds.play("error")
+            if self._quick_note_active:
+                self._quick_note_active = False
+                self._audio.update_thresholds(
+                    self._config.vad_silence_seconds,
+                    self._config.max_record_seconds,
+                )
             self._current_signals = None
             self._update_state(AppState.IDLE)
             return
@@ -404,6 +427,10 @@ class SottoApp(QMainWindow):
             if self._quick_note_active:
                 self._quick_note_active = False
                 self._append_quick_note(result.text)
+                self._audio.update_thresholds(
+                    self._config.vad_silence_seconds,
+                    self._config.max_record_seconds,
+                )
             elif self._config.confirmation_mode:
                 # Show preview window — user decides whether to paste
                 logger.info("Confirmation mode ON — showing preview window")
@@ -413,8 +440,6 @@ class SottoApp(QMainWindow):
                 return
             else:
                 self._finalize_paste(result.text)
-        else:
-            logger.info("No speech detected")
         self._current_signals = None
         self._update_state(AppState.IDLE)
 
